@@ -1,0 +1,875 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>电影文件管理中心</title>
+    <!-- Vue 3 -->
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <!-- Element Plus CSS & JS -->
+    <link rel="stylesheet" href="https://unpkg.com/element-plus/dist/index.css" />
+    <script src="https://unpkg.com/element-plus"></script>
+    <!-- Icons -->
+    <script src="https://unpkg.com/@element-plus/icons-vue"></script>
+    
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 20px; background-color: #f5f7fa; color: #333; }
+        .container { max-width: 1600px; margin: 0 auto; }
+        
+        .section-card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 12px 0 rgba(0,0,0,0.05); margin-bottom: 20px; }
+        .section-title { font-size: 18px; font-weight: bold; margin-bottom: 15px; border-bottom: 1px solid #eee; padding-bottom: 10px; display: flex; justify-content: space-between; align-items: center; }
+        
+        .file-link { color: #409EFF; text-decoration: none; cursor: pointer; font-weight: 500; }
+        .file-link:hover { text-decoration: underline; }
+        
+        .log-window { background: #1e1e1e; color: #ddd; padding: 10px; border-radius: 4px; height: 100px; overflow-y: auto; font-family: Consolas, monospace; font-size: 12px; margin-top: 10px; }
+        .log-entry { margin-bottom: 2px; }
+        
+        .filter-row { display: flex; gap: 10px; margin-bottom: 10px; align-items: center; }
+        .filter-group { border: 1px solid #e4e7ed; padding: 10px; border-radius: 4px; background-color: #fafafa; margin-bottom: 10px; }
+        .filter-label { font-size: 14px; color: #606266; width: 80px; font-weight: 500; }
+        
+        .w-100 { width: 100%; }
+        .flex-center { display: flex; justify-content: center; align-items: center; }
+        .mt-10 { margin-top: 10px; }
+        .ml-10 { margin-left: 10px; }
+        
+        .scan-btn-large { width: 200px; height: 50px; font-size: 18px; }
+        .progress-container { margin-top: 20px; margin-bottom: 20px; }
+        
+        .config-actions { display: flex; gap: 10px; align-items: center; }
+        .config-actions .el-upload { display: inline-flex; margin: 0; padding: 0; line-height: 1; vertical-align: middle; }
+        .config-actions .el-upload .el-button { margin: 0; }
+        
+        .excluded-row { opacity: 0.6; background-color: #f5f7fa !important; }
+        .excluded-row .el-table__cell { color: #909399; }
+    </style>
+</head>
+<body>
+    <div id="app" class="container">
+        <!-- Hidden data for offline report mode -->
+        <script id="embedded-data-files" type="application/json">(( files_json | default('null') ))</script>
+        <script id="embedded-data-groups" type="application/json">(( groups_json | default('null') ))</script>
+        
+        <!-- 1. 扫描配置 -->
+        <div class="section-card">
+            <div class="section-title">
+                <span><el-icon><Setting /></el-icon> 扫描配置</span>
+                <div class="config-actions">
+                    <el-button size="small" @click="saveConfig">保存配置</el-button>
+                    <el-button size="small" @click="exportConfig">导出配置</el-button>
+                    <div style="display: inline-flex; align-items: center;">
+                        <el-upload
+                            action=""
+                            :auto-upload="false"
+                            :show-file-list="false"
+                            :on-change="importConfig"
+                            accept=".json"
+                        >
+                            <el-button size="small">导入配置</el-button>
+                        </el-upload>
+                    </div>
+                </div>
+            </div>
+            <el-form label-position="top">
+                <el-row :gutter="20">
+                    <el-col :span="16">
+                        <el-form-item label="扫描路径 (每行一个)">
+                            <el-input v-model="config.paths" type="textarea" :rows="3" placeholder="D:\Movies\n\\NAS\Public\Video"></el-input>
+                        </el-form-item>
+                    </el-col>
+                    <el-col :span="8">
+                        <el-form-item label="视频扩展名 (用逗号分隔)">
+                            <el-input v-model="config.extensions" placeholder=".mkv, .mp4, .avi"></el-input>
+                        </el-form-item>
+                        <el-form-item>
+                            <div style="display: flex; flex-direction: column; gap: 5px;">
+                                <el-checkbox v-model="config.ignoreHidden">忽略隐藏文件</el-checkbox>
+                                <el-checkbox v-model="config.ignoreSystem">忽略回收站及系统目录</el-checkbox>
+                            </div>
+                        </el-form-item>
+                    </el-col>
+                </el-row>
+            </el-form>
+        </div>
+
+        <!-- 2. 扫描控制与进度 -->
+        <div class="flex-center" style="margin-bottom: 20px;">
+            <el-button type="primary" class="scan-btn-large" @click="startScan" :loading="isBusy" :disabled="isBusy">
+                <span v-if="!isBusy">开始扫描</span>
+                <span v-else>扫描中...</span>
+            </el-button>
+            <el-button v-if="isBusy" type="danger" @click="stopScan" style="margin-left: 20px; height: 50px;">停止</el-button>
+        </div>
+
+        <div class="section-card progress-container" v-if="status && (isBusy || status.progress > 0)">
+            <div class="section-title" v-text="'扫描进度: ' + (status.message || '...')"></div>
+            <el-progress :percentage="status.progress || 0" :status="progressStatus" :text-inside="true" :stroke-width="20"></el-progress>
+            <div class="log-window" ref="logWindow">
+                <div v-for="(log, i) in (status.logs || [])" :key="i" class="log-entry" v-text="log"></div>
+            </div>
+        </div>
+
+        <!-- 3. 所有文件列表 (含筛选) -->
+        <div class="section-card" v-show="files.length > 0">
+            <div class="section-title">
+                <span><el-icon><List /></el-icon> 文件列表 (<span v-text="filteredFiles.length"></span> / <span v-text="files.length"></span>)</span>
+                <div style="display: flex; gap: 10px; align-items: center;">
+                    <!-- TMDB Zone -->
+                    <el-input v-model="config.apiKey" placeholder="TMDB API Key" style="width: 200px;" clearable></el-input>
+                    <el-button type="warning" @click="startTMDB" :disabled="isBusy || filteredFiles.length === 0">
+                        <el-icon><Search /></el-icon> TMDB 搜索
+                    </el-button>
+                    
+                    <el-divider direction="vertical"></el-divider>
+                    
+                    <el-button type="success" @click="startMatching" :disabled="isBusy || filteredFiles.length === 0">
+                        <el-icon><Connection /></el-icon> 查找重复
+                    </el-button>
+                </div>
+            </div>
+
+            <!-- 5个独立筛选栏 -->
+            <div class="filter-group">
+                <div class="filter-row">
+                    <span class="filter-label">路径</span>
+                    <el-select v-model="filters.path.mode" style="width: 100px;">
+                        <el-option label="包含" value="include"></el-option>
+                        <el-option label="不包含" value="exclude"></el-option>
+                    </el-select>
+                    <el-input v-model="filters.path.value" placeholder="例如: Downloads" clearable style="width: 300px;"></el-input>
+                </div>
+
+                <div class="filter-row">
+                    <span class="filter-label">文件名</span>
+                    <el-select v-model="filters.filename.mode" style="width: 100px;">
+                        <el-option label="包含" value="include"></el-option>
+                        <el-option label="不包含" value="exclude"></el-option>
+                    </el-select>
+                    <el-input v-model="filters.filename.value" placeholder="例如: Matrix" clearable style="width: 300px;"></el-input>
+                </div>
+
+                <div class="filter-row">
+                    <span class="filter-label">扩展名</span>
+                    <el-select v-model="filters.extension.mode" style="width: 100px;">
+                        <el-option label="包含" value="include"></el-option>
+                        <el-option label="不包含" value="exclude"></el-option>
+                    </el-select>
+                    <el-input v-model="filters.extension.value" placeholder="例如: .mkv" clearable style="width: 300px;"></el-input>
+                </div>
+
+                <div class="filter-row">
+                    <span class="filter-label">大小 (MB)</span>
+                    <el-select v-model="filters.size.mode" style="width: 100px;">
+                        <el-option label="大于" value="gt"></el-option>
+                        <el-option label="小于" value="lt"></el-option>
+                    </el-select>
+                    <el-input-number v-model="filters.size.value" :min="0" :step="100" style="width: 150px;"></el-input-number>
+                </div>
+
+                <div class="filter-row">
+                    <span class="filter-label">时长 (分)</span>
+                    <el-select v-model="filters.duration.mode" style="width: 100px;">
+                        <el-option label="大于" value="gt"></el-option>
+                        <el-option label="小于" value="lt"></el-option>
+                    </el-select>
+                    <el-input-number v-model="filters.duration.value" :min="0" :step="10" style="width: 150px;"></el-input-number>
+                </div>
+
+                 <el-collapse>
+                    <el-collapse-item title="高级表达式 (JavaScript 语法)" name="1">
+                        <el-input v-model="filters.expression" placeholder="例如: (size_mb > 1000) & (path.includes('Test'))"></el-input>
+                    </el-collapse-item>
+                </el-collapse>
+                
+                <div style="margin-top: 15px; text-align: center;">
+                    <el-button type="primary" icon="Filter" @click="applyFilters" style="width: 200px;">应用筛选条件</el-button>
+                </div>
+            </div>
+
+            <!-- 文件表格 -->
+            <el-table :data="pagedFiles" style="width: 100%" border stripe size="small" @selection-change="handleFileSelection">
+                <el-table-column type="selection" width="55"></el-table-column>
+                <el-table-column prop="filename" label="文件名" sortable min-width="250">
+                    <template #default="scope">
+                        <span class="file-link" @click="openFile(scope.row.path)">
+                            <el-icon><Video-Play /></el-icon> <span v-text="scope.row.filename"></span>
+                        </span>
+                    </template>
+                </el-table-column>
+                <el-table-column prop="size_mb" label="大小 (MB)" sortable width="120"></el-table-column>
+                <el-table-column prop="duration" label="时长" sortable width="120">
+                    <template #default="scope"><span v-text="formatDuration(scope.row.duration)"></span></template>
+                </el-table-column>
+                <el-table-column prop="path" label="路径" min-width="300">
+                    <template #default="scope">
+                        <span class="file-link" @click="revealFile(scope.row.path)" v-text="scope.row.path"></span>
+                    </template>
+                </el-table-column>
+            </el-table>
+            
+            <el-pagination
+                background
+                layout="prev, pager, next, sizes, total"
+                :total="filteredFiles.length"
+                v-model:current-page="currentPage"
+                v-model:page-size="pageSize"
+                :page-sizes="[10, 50, 100, 500]"
+                class="mt-10"
+                style="justify-content: center;"
+            ></el-pagination>
+        </div>
+
+        <!-- 4. 重复文件列表 -->
+        <div class="section-card" v-show="suspectedGroups.length > 0">
+            <div class="section-title">
+                <span><el-icon><Files /></el-icon> 疑似重复分组 (<span v-text="suspectedGroups.length"></span> 组)</span>
+                <div>
+                     <el-button type="primary" size="small" :disabled="selectedSuspectedGroups.length === 0" @click="batchVerifySelected">
+                        批量验证Hash选中 (<span v-text="selectedSuspectedGroups.length"></span>)
+                    </el-button>
+                </div>
+            </div>
+            
+            <el-table :data="suspectedGroups" style="width: 100%" border stripe size="small" :default-sort="{prop: 'total_size', order: 'descending'}" @selection-change="handleSuspectedSelectionChange">
+                <el-table-column type="selection" width="55"></el-table-column>
+                <el-table-column type="expand">
+                    <template #default="props">
+                        <!-- Nested table for group files -->
+                        <div style="padding: 10px; background: #fdf6ec;">
+                            <div style="margin-bottom: 10px; display: flex; justify-content: space-between;">
+                                 <div>
+                                    <span style="font-weight: bold;">匹配原因:</span>
+                                    <el-tag v-for="r in (props.row.reasons || [])" :key="r" size="small" style="margin-left: 5px;" v-text="r"></el-tag>
+                                 </div>
+                                 <div>
+                                    <el-button type="primary" size="small" @click="startDeepVerify(props.row.id)" v-if="props.row.status !== 'confirmed'">验证Hash</el-button>
+                                    <el-button type="info" size="small" :disabled="selectedInGroup(props.row.id).length === 0" @click="batchExclude(props.row.id)">
+                                        排除选中 (<span v-text="selectedInGroup(props.row.id).length"></span>)
+                                    </el-button>
+                                    <el-button type="danger" size="small" :disabled="selectedInGroup(props.row.id).length === 0" @click="batchDelete(props.row.id)">
+                                        删除选中 (<span v-text="selectedInGroup(props.row.id).length"></span>)
+                                    </el-button>
+                                 </div>
+                            </div>
+                            
+                            <el-table :data="props.row.files" border size="small" @selection-change="(val) => handleSelectionChange(props.row.id, val)" :row-class-name="tableRowClassName">
+                                <el-table-column type="selection" width="55"></el-table-column>
+                                <el-table-column prop="filename" label="文件名" min-width="250">
+                                     <template #default="scope">
+                                        <span class="file-link" @click="openFile(scope.row.path)" v-text="scope.row.filename"></span>
+                                        <el-tag v-if="scope.row.excluded" size="small" type="info" style="margin-left: 5px;">已排除</el-tag>
+                                    </template>
+                                </el-table-column>
+                                <el-table-column label="匹配详情" width="150">
+                                     <template #default="scope">
+                                        <el-tag v-for="r in (scope.row.match_reason || [])" :key="r" size="small" style="margin-right:2px" v-text="r"></el-tag>
+                                    </template>
+                                </el-table-column>
+                                <el-table-column prop="size_mb" label="大小(MB)" width="100"></el-table-column>
+                                 <el-table-column prop="duration" label="时长" width="100">
+                                    <template #default="scope"><span v-text="formatDuration(scope.row.duration)"></span></template>
+                                </el-table-column>
+                                <el-table-column prop="path" label="路径"></el-table-column>
+                                <el-table-column width="200" label="操作">
+                                     <template #default="scope">
+                                        <el-button type="danger" size="small" @click="deleteFile(scope.row.uuid)" :disabled="scope.row.excluded">删除</el-button>
+                                        <el-button type="primary" size="small" @click="deleteOthers(props.row.id, scope.row.uuid)" :disabled="scope.row.excluded">保留此文件</el-button>
+                                    </template>
+                                </el-table-column>
+                            </el-table>
+                        </div>
+                    </template>
+                </el-table-column>
+                
+                <el-table-column label="组名 (主要文件名)" prop="primary_name" min-width="300"></el-table-column>
+                <el-table-column label="包含文件数" width="100">
+                    <template #default="scope"><span v-text="scope.row.files.length"></span></template>
+                </el-table-column>
+                <el-table-column label="总大小 (MB)" prop="total_size" sortable width="150">
+                     <template #default="scope">
+                        <span v-text="(scope.row.total_size / 1024 / 1024).toFixed(2)"></span>
+                    </template>
+                </el-table-column>
+                <el-table-column label="状态" width="120">
+                     <template #default="scope">
+                         <el-tag v-if="scope.row.status === 'confirmed'" type="success">确定重复</el-tag>
+                         <el-tag v-else-if="scope.row.status === 'content_mismatch'" type="danger">内容不同</el-tag>
+                         <el-tag v-else type="warning">疑似重复</el-tag>
+                    </template>
+                </el-table-column>
+            </el-table>
+        </div>
+
+        <!-- 5. 确定重复列表 -->
+        <div class="section-card" v-show="confirmedGroups.length > 0">
+            <div class="section-title">
+                <span><el-icon><Check /></el-icon> 确定重复分组 (<span v-text="confirmedGroups.length"></span> 组)</span>
+            </div>
+            
+            <el-table :data="confirmedGroups" style="width: 100%" border stripe size="small" :default-sort="{prop: 'total_size', order: 'descending'}">
+                <el-table-column type="expand">
+                    <template #default="props">
+                        <!-- Nested table for confirmed group files -->
+                        <div style="padding: 10px; background: #f0f9eb;">
+                            <div style="margin-bottom: 10px; display: flex; justify-content: space-between;">
+                                 <div>
+                                    <span style="font-weight: bold;">匹配原因:</span>
+                                    <el-tag v-for="r in (props.row.reasons || [])" :key="r" size="small" style="margin-left: 5px;" v-text="r"></el-tag>
+                                 </div>
+                                 <div>
+                                    <el-button type="info" size="small" :disabled="selectedInGroup(props.row.id).length === 0" @click="batchExclude(props.row.id)">
+                                        排除选中 (<span v-text="selectedInGroup(props.row.id).length"></span>)
+                                    </el-button>
+                                    <el-button type="danger" size="small" :disabled="selectedInGroup(props.row.id).length === 0" @click="batchDelete(props.row.id)">
+                                        删除选中 (<span v-text="selectedInGroup(props.row.id).length"></span>)
+                                    </el-button>
+                                 </div>
+                            </div>
+                            
+                            <el-table :data="props.row.files" border size="small" @selection-change="(val) => handleSelectionChange(props.row.id, val)" :row-class-name="tableRowClassName">
+                                <el-table-column type="selection" width="55"></el-table-column>
+                                <el-table-column prop="filename" label="文件名" min-width="250">
+                                     <template #default="scope">
+                                        <span class="file-link" @click="openFile(scope.row.path)" v-text="scope.row.filename"></span>
+                                        <el-tag v-if="scope.row.excluded" size="small" type="info" style="margin-left: 5px;">已排除</el-tag>
+                                    </template>
+                                </el-table-column>
+                                <el-table-column label="匹配详情" width="150">
+                                     <template #default="scope">
+                                        <el-tag v-for="r in (scope.row.match_reason || [])" :key="r" size="small" style="margin-right:2px" v-text="r"></el-tag>
+                                    </template>
+                                </el-table-column>
+                                <el-table-column prop="size_mb" label="大小(MB)" width="100"></el-table-column>
+                                 <el-table-column prop="duration" label="时长" width="100">
+                                    <template #default="scope"><span v-text="formatDuration(scope.row.duration)"></span></template>
+                                </el-table-column>
+                                <el-table-column prop="path" label="路径"></el-table-column>
+                                <el-table-column width="200" label="操作">
+                                     <template #default="scope">
+                                        <el-button type="danger" size="small" @click="deleteFile(scope.row.uuid)" :disabled="scope.row.excluded">删除</el-button>
+                                        <el-button type="primary" size="small" @click="deleteOthers(props.row.id, scope.row.uuid)" :disabled="scope.row.excluded">保留此文件</el-button>
+                                    </template>
+                                </el-table-column>
+                            </el-table>
+                        </div>
+                    </template>
+                </el-table-column>
+                
+                <el-table-column label="组名 (主要文件名)" prop="primary_name" min-width="300"></el-table-column>
+                <el-table-column label="包含文件数" width="100">
+                    <template #default="scope"><span v-text="scope.row.files.length"></span></template>
+                </el-table-column>
+                <el-table-column label="总大小 (MB)" prop="total_size" sortable width="150">
+                     <template #default="scope">
+                        <span v-text="(scope.row.total_size / 1024 / 1024).toFixed(2)"></span>
+                    </template>
+                </el-table-column>
+                <el-table-column label="状态" width="120">
+                     <template #default="scope">
+                         <el-tag type="success">确定重复</el-tag>
+                    </template>
+                </el-table-column>
+            </el-table>
+        </div>
+        
+    </div>
+
+    <script>
+        const { createApp, ref, computed, onMounted, nextTick, watch } = Vue;
+
+        const app = createApp({
+            setup() {
+                const files = ref([]);
+                const filteredFiles = ref([]); // Separate state for filtered result
+                const fileSelection = ref([]); // Main table selection
+                const groups = ref([]);
+                const isBusy = ref(false);
+                const groupSelections = ref({});
+                const selectedSuspectedGroups = ref([]); // Selection for suspected table
+                
+                const config = ref({
+                    paths: 'D:\\Movies',
+                    extensions: '.mkv, .mp4, .avi, .mov, .wmv, .flv, .webm, .rmvb',
+                    apiKey: '',
+                    ignoreHidden: true,
+                    ignoreSystem: true
+                });
+                
+                const status = ref({ status: 'idle', progress: 0, message: '', logs: [] });
+                
+                const filters = ref({
+                    path: { mode: 'include', value: '' },
+                    filename: { mode: 'include', value: '' },
+                    extension: { mode: 'include', value: '' },
+                    size: { mode: 'gt', value: 0 },
+                    duration: { mode: 'gt', value: 0 },
+                    expression: ''
+                });
+
+                const currentPage = ref(1);
+                const pageSize = ref(50);
+                const logWindow = ref(null);
+                let pollTimer = null;
+
+                // --- Config Persistence ---
+                const loadConfig = () => {
+                    const saved = localStorage.getItem('movie_manager_config');
+                    if (saved) {
+                        try {
+                            const parsed = JSON.parse(saved);
+                            config.value = { ...config.value, ...parsed };
+                        } catch (e) { console.error("Config load error", e); }
+                    }
+                };
+
+                const saveConfig = () => {
+                    localStorage.setItem('movie_manager_config', JSON.stringify(config.value));
+                    ElementPlus.ElMessage.success('配置已保存到浏览器');
+                };
+
+                const exportConfig = () => {
+                    const exportData = {
+                        ...config.value,
+                        filters: filters.value
+                    };
+                    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(exportData));
+                    const link = document.createElement('a');
+                    link.href = dataStr;
+                    link.download = "movie_config.json";
+                    link.click();
+                };
+
+                const importConfig = (file) => {
+                    const reader = new FileReader();
+                    reader.onload = (e) => {
+                        try {
+                            const parsed = JSON.parse(e.target.result);
+                            // Separate filters from config if present
+                            if (parsed.filters) {
+                                filters.value = { ...filters.value, ...parsed.filters };
+                                delete parsed.filters;
+                            }
+                            config.value = { ...config.value, ...parsed };
+                            ElementPlus.ElMessage.success('配置导入成功');
+                            saveConfig();
+                        } catch (err) { ElementPlus.ElMessage.error('无效的配置文件'); }
+                    };
+                    reader.readAsText(file.raw);
+                };
+
+                // --- Filtering Logic (Manual Trigger) ---
+                const generateExpression = () => {
+                    const f = filters.value;
+                    const parts = [];
+                    
+                    if (f.path.value) {
+                        const val = f.path.value.replace(/'/g, "\\'");
+                        if (f.path.mode === 'include') parts.push(`(path || '').toLowerCase().includes('${val}'.toLowerCase())`);
+                        else parts.push(`!(path || '').toLowerCase().includes('${val}'.toLowerCase())`);
+                    }
+                    if (f.filename.value) {
+                        const val = f.filename.value.replace(/'/g, "\\'");
+                        if (f.filename.mode === 'include') parts.push(`(filename || '').toLowerCase().includes('${val}'.toLowerCase())`);
+                        else parts.push(`!(filename || '').toLowerCase().includes('${val}'.toLowerCase())`);
+                    }
+                    if (f.extension.value) {
+                        const val = f.extension.value.replace(/'/g, "\\'");
+                        if (f.extension.mode === 'include') parts.push(`(extension || '').toLowerCase().includes('${val}'.toLowerCase())`);
+                        else parts.push(`!(extension || '').toLowerCase().includes('${val}'.toLowerCase())`);
+                    }
+                    if (f.size.value > 0) {
+                        if (f.size.mode === 'gt') parts.push(`size_mb > ${f.size.value}`);
+                        else parts.push(`size_mb < ${f.size.value}`);
+                    }
+                    if (f.duration.value > 0) {
+                        // Duration in minutes
+                        if (f.duration.mode === 'gt') parts.push(`(duration/60) > ${f.duration.value}`);
+                        else parts.push(`(duration/60) < ${f.duration.value}`);
+                    }
+                    
+                    return parts.join(' && ');
+                };
+
+                const applyFilters = () => {
+                    // Generate expression from UI if expression box is empty
+                    if (!filters.value.expression.trim()) {
+                        const generated = generateExpression();
+                        if (generated) {
+                            filters.value.expression = generated;
+                            ElementPlus.ElMessage.info('已根据筛选条件生成高级表达式');
+                        }
+                    }
+                    
+                    const f = filters.value;
+                    // FIX: Always filter from full 'files' list, not 'filteredFiles'
+                    const result = files.value.filter(file => {
+                        // 1. Path
+                        if (f.path.value) {
+                            const match = (file.path || '').toLowerCase().includes(f.path.value.toLowerCase());
+                            if (f.path.mode === 'include' && !match) return false;
+                            if (f.path.mode === 'exclude' && match) return false;
+                        }
+                        // 2. Filename
+                        if (f.filename.value) {
+                            const match = (file.filename || '').toLowerCase().includes(f.filename.value.toLowerCase());
+                            if (f.filename.mode === 'include' && !match) return false;
+                            if (f.filename.mode === 'exclude' && match) return false;
+                        }
+                        // 3. Extension
+                        if (f.extension.value) {
+                            const match = (file.extension || '').toLowerCase().includes(f.extension.value.toLowerCase());
+                            if (f.extension.mode === 'include' && !match) return false;
+                            if (f.extension.mode === 'exclude' && match) return false;
+                        }
+                        // 4. Size
+                        if (f.size.value > 0) {
+                            if (f.size.mode === 'gt' && file.size_mb <= f.size.value) return false;
+                            if (f.size.mode === 'lt' && file.size_mb >= f.size.value) return false;
+                        }
+                        // 5. Duration
+                        if (f.duration.value > 0) {
+                            const durationMin = (file.duration || 0) / 60;
+                            if (f.duration.mode === 'gt' && durationMin <= f.duration.value) return false;
+                            if (f.duration.mode === 'lt' && durationMin >= f.duration.value) return false;
+                        }
+                        // 6. Expression
+                        if (f.expression.trim()) {
+                            try {
+                                const { filename, path, size_mb, duration, extension, id_code } = file;
+                                const result = new Function('filename', 'path', 'size_mb', 'duration', 'extension', 'id_code',
+                                    `return (${f.expression});`
+                                )(filename, path, size_mb, duration, extension, id_code || '');
+                                if (!result) return false;
+                            } catch(e) { return false; }
+                        }
+                        return true;
+                    });
+                    filteredFiles.value = result;
+                    currentPage.value = 1; // Reset pagination
+                    ElementPlus.ElMessage.success(`筛选完成，共找到 ${result.length} 个文件`);
+                };
+
+                // --- Data Fetching with Robust JSON Parsing ---
+                const fetchData = async () => {
+                    // 1. Try to load from embedded data first (Report Mode)
+                    try {
+                        const embeddedFiles = document.getElementById('embedded-data-files').textContent;
+                        const embeddedGroups = document.getElementById('embedded-data-groups').textContent;
+                        
+                        // Check if it's the raw template placeholder (Web Mode)
+                        // Use string literal to avoid Jinja2 parsing confusion
+                        const rawPlaceholder = "(( files_json | default('null') ))";
+                        if (embeddedFiles.trim() !== rawPlaceholder && embeddedFiles.trim() !== 'null') {
+                            const filesData = JSON.parse(embeddedFiles);
+                            const groupsData = JSON.parse(embeddedGroups);
+                            
+                            if (filesData) {
+                                files.value = filesData;
+                                groups.value = groupsData || [];
+                                if (filteredFiles.value.length === 0 && files.value.length > 0) {
+                                    filteredFiles.value = files.value;
+                                }
+                                return; // Stop here if data loaded from HTML
+                            }
+                        }
+                    } catch (e) {
+                        console.log("Embedded data load failed or not present, trying API...");
+                    }
+
+                    // 2. Fetch from API (Web Mode)
+                    try {
+                        const res = await fetch('/api/data');
+                        if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+                        
+                        // Use text() then manual cleanup before JSON.parse
+                        let text = await res.text();
+                        
+                        // 1. Remove BOM (Byte Order Mark) if present
+                        text = text.replace(/^\uFEFF/, '');
+                        
+                        // 2. Remove potential invalid chars (control characters and replacement char)
+                        // Note: \uFFFD is the replacement char.
+                        text = text.replace(/[\u0000-\u001F\uFFFD]+/g, ""); 
+                        
+                        try {
+                            const data = JSON.parse(text);
+                            files.value = data.files;
+                            groups.value = data.groups;
+                            
+                            // If filteredFiles is empty (first load), init it
+                            if (filteredFiles.value.length === 0 && files.value.length > 0) {
+                                filteredFiles.value = files.value;
+                            }
+                        } catch (parseErr) {
+                            console.error("JSON Parse Error. Substring around error:", text.substring(0, 100)); 
+                            throw parseErr;
+                        }
+                        
+                    } catch (e) {
+                        console.error("Fetch data error", e);
+                        ElementPlus.ElMessage.error("数据加载失败: " + e.message);
+                    }
+                };
+
+                // --- Actions ---
+                const startScan = async () => {
+                    const paths = config.value.paths.split('\n').map(p => p.trim()).filter(p => p);
+                    const exts = config.value.extensions.split(',').map(e => e.trim()).filter(e => e);
+                    
+                    if (paths.length === 0) return ElementPlus.ElMessage.warning('请输入扫描路径');
+
+                    try {
+                        const res = await fetch('/api/scan/start', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({ 
+                                paths: paths, 
+                                extensions: exts,
+                                ignore_hidden: config.value.ignoreHidden,
+                                ignore_system: config.value.ignoreSystem
+                            })
+                        });
+                        const data = await res.json();
+                        if (data.success) {
+                            isBusy.value = true;
+                            files.value = []; 
+                            groups.value = [];
+                            groupSelections.value = {};
+                            startPolling();
+                        } else {
+                            ElementPlus.ElMessage.error(data.message);
+                        }
+                    } catch (e) { ElementPlus.ElMessage.error('无法启动: ' + e); }
+                };
+                
+                const startTMDB = async () => {
+                    if (!config.value.apiKey) return ElementPlus.ElMessage.warning('请输入 API Key');
+                    // If selecting specific files, send those. 
+                    // If no selection but filtering is active (filtered < total), send filtered.
+                    // If no selection and no filtering (filtered == total), send null to process ALL on backend.
+                    
+                    let uuids = null;
+                    if (fileSelection.value.length > 0) {
+                        uuids = fileSelection.value.map(f => f.uuid);
+                    } else if (filteredFiles.value.length < files.value.length) {
+                        uuids = filteredFiles.value.map(f => f.uuid);
+                    }
+                    
+                    try {
+                        const res = await fetch('/api/tmdb/start', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({ api_key: config.value.apiKey, uuids: uuids })
+                        });
+                        const data = await res.json();
+                        if (data.success) { isBusy.value = true; startPolling(); }
+                        else { ElementPlus.ElMessage.error(data.message); }
+                    } catch (e) { ElementPlus.ElMessage.error(e); }
+                };
+                
+                const startMatching = async () => {
+                    let uuids = null;
+                    if (fileSelection.value.length > 0) {
+                        uuids = fileSelection.value.map(f => f.uuid);
+                    } else if (filteredFiles.value.length < files.value.length) {
+                        uuids = filteredFiles.value.map(f => f.uuid);
+                    }
+                    
+                    try {
+                        const res = await fetch('/api/match/start', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({ uuids: uuids })
+                        });
+                        const data = await res.json();
+                        if (data.success) { isBusy.value = true; startPolling(); }
+                        else { ElementPlus.ElMessage.error(data.message); }
+                    } catch (e) { ElementPlus.ElMessage.error(e); }
+                };
+
+                const startDeepVerify = async (groupId) => {
+                    // ... (existing)
+                    // We can reuse the batch endpoint or existing one.
+                    // Let's use the list endpoint
+                    try {
+                        const res = await fetch('/api/match/deep', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({ group_ids: [groupId] })
+                        });
+                        const data = await res.json();
+                        if (data.success) { isBusy.value = true; startPolling(); }
+                        else { ElementPlus.ElMessage.error(data.message); }
+                    } catch (e) { ElementPlus.ElMessage.error(e); }
+                };
+
+                const batchVerifySelected = async () => {
+                    if (selectedSuspectedGroups.value.length === 0) return;
+                    const groupIds = selectedSuspectedGroups.value.map(g => g.id);
+                    try {
+                        const res = await fetch('/api/match/deep', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({ group_ids: groupIds })
+                        });
+                        const data = await res.json();
+                        if (data.success) { 
+                            isBusy.value = true; 
+                            startPolling(); 
+                            selectedSuspectedGroups.value = []; // Clear selection
+                        }
+                        else { ElementPlus.ElMessage.error(data.message); }
+                    } catch (e) { ElementPlus.ElMessage.error(e); }
+                };
+
+                const stopScan = async () => { await fetch('/api/scan/stop', { method: 'POST' }); };
+
+                // ... (Delete functions similar to before)
+                const deleteFile = async (uuid) => {
+                    try {
+                        await ElementPlus.ElMessageBox.confirm('确定要删除吗?', '警告', { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' });
+                        const res = await fetch('/api/file/delete', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ uuid: uuid }) });
+                        const data = await res.json();
+                        if (data.success) { ElementPlus.ElMessage.success('已删除'); fetchData(); }
+                        else { ElementPlus.ElMessage.error(data.message); }
+                    } catch (e) { if(e!=='cancel') console.error(e); }
+                };
+
+                const deleteOthers = async (groupId, keepUuid) => {
+                    try {
+                        await ElementPlus.ElMessageBox.confirm('确定要保留此文件并删除其它吗?', '危险', { confirmButtonText: '确定', cancelButtonText: '取消', type: 'error' });
+                        const res = await fetch('/api/group/delete_others', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ group_id: groupId, keep_uuid: keepUuid }) });
+                        const data = await res.json();
+                        if (data.success) { ElementPlus.ElMessage.success('操作成功'); fetchData(); }
+                        else { ElementPlus.ElMessage.error(data.message); }
+                    } catch (e) { if(e!=='cancel') console.error(e); }
+                };
+                
+                const batchDelete = async (groupId) => {
+                    const selection = groupSelections.value[groupId];
+                    if (!selection || selection.length === 0) return;
+                    try {
+                        await ElementPlus.ElMessageBox.confirm(`删除选中的 ${selection.length} 个文件?`, '警告', { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' });
+                        const uuids = selection.map(f => f.uuid);
+                        const res = await fetch('/api/files/batch_delete', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ uuids: uuids }) });
+                        const data = await res.json();
+                        if (data.success) { ElementPlus.ElMessage.success('批量删除成功'); fetchData(); groupSelections.value[groupId] = []; }
+                        else { ElementPlus.ElMessage.error(data.message); }
+                    } catch (e) { if(e!=='cancel') console.error(e); }
+                };
+
+                const batchExclude = async (groupId) => {
+                    const selection = groupSelections.value[groupId];
+                    if (!selection || selection.length === 0) return;
+                    try {
+                        await ElementPlus.ElMessageBox.confirm(`排除选中的 ${selection.length} 个文件? 以后将不再提示重复。`, '提示', { confirmButtonText: '排除', cancelButtonText: '取消', type: 'info' });
+                        const uuids = selection.map(f => f.uuid);
+                        const res = await fetch('/api/files/batch_exclude', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ uuids: uuids }) });
+                        const data = await res.json();
+                        if (data.success) { ElementPlus.ElMessage.success('操作成功'); fetchData(); groupSelections.value[groupId] = []; }
+                        else { ElementPlus.ElMessage.error(data.message); }
+                    } catch (e) { if(e!=='cancel') console.error(e); }
+                };
+
+                const tableRowClassName = ({ row, rowIndex }) => {
+                    if (row.excluded) {
+                        return 'excluded-row';
+                    }
+                    return '';
+                };
+
+                const handleSelectionChange = (groupId, selection) => { groupSelections.value[groupId] = selection; };
+                const selectedInGroup = (groupId) => groupSelections.value[groupId] || [];
+                const handleFileSelection = (val) => { fileSelection.value = val; };
+                const handleSuspectedSelectionChange = (val) => { selectedSuspectedGroups.value = val; };
+
+                // --- Helpers ---
+                const startPolling = () => {
+                    if (pollTimer) clearInterval(pollTimer);
+                    pollTimer = setInterval(async () => {
+                        try {
+                            const res = await fetch('/api/scan/status');
+                            if (!res.ok) throw new Error(`Status check failed: ${res.status}`);
+                            
+                            const text = await res.text();
+                            const cleaned = text.replace(/^\uFEFF/, '').replace(/[\u0000-\u001F\uFFFD]+/g, "");
+                    try {
+                        const data = JSON.parse(cleaned);
+                        if (data) {
+                            status.value = data;
+                            await nextTick();
+                            if (logWindow.value) logWindow.value.scrollTop = logWindow.value.scrollHeight;
+                            if (['completed', 'scanned', 'error', 'cancelled'].includes(data.status)) {
+                                isBusy.value = false;
+                                clearInterval(pollTimer);
+                                fetchData();
+                            }
+                        }
+                    } catch (parseErr) {
+                         console.error("Status JSON Parse Error:", parseErr);
+                    }
+                        } catch (e) { 
+                            console.error("Polling error:", e); 
+                            // Don't spam UI with polling errors, just log
+                        }
+                    }, 1000);
+                };
+
+                const openFile = async (path) => fetch(`/api/open?path=${encodeURIComponent(path)}`);
+                const revealFile = async (path) => fetch(`/api/reveal?path=${encodeURIComponent(path)}`);
+                const formatDuration = (s) => {
+                    if (!s) return '';
+                    const h = Math.floor(s / 3600);
+                    const rem = s % 3600;
+                    const m = Math.floor(rem / 60);
+                    const sec = Math.floor(s % 60);
+                    return `${h}h ${m}m ${sec}s`;
+                };
+                const progressStatus = computed(function() {
+                    if (!status.value) return '';
+                    if (status.value.status === 'error') return 'exception';
+                    if (['completed', 'scanned'].includes(status.value.status)) return 'success';
+                    return '';
+                });
+                
+                const pagedFiles = computed(function() {
+                    const start = (currentPage.value - 1) * pageSize.value;
+                    const end = start + pageSize.value;
+                    return filteredFiles.value.slice(start, end);
+                });
+                
+                const confirmedGroups = computed( () => {
+                    return groups.value.filter(g => g.status === 'confirmed');
+                });
+                
+                const suspectedGroups = computed( () => {
+                    return groups.value.filter(g => g.status !== 'confirmed');
+                });
+
+                onMounted(function() {
+                    loadConfig();
+                    startPolling();
+                    fetchData();
+                });
+
+                return {
+                    files, groups, isBusy, config, status, filters,
+                    filteredFiles, pagedFiles, currentPage, pageSize, logWindow, progressStatus,
+                    startScan, stopScan, startTMDB, startMatching,
+                    openFile, revealFile, formatDuration, deleteFile, deleteOthers,
+                    handleSelectionChange, selectedInGroup, batchDelete, batchExclude, handleFileSelection,
+                    saveConfig, exportConfig, importConfig, applyFilters, startDeepVerify, tableRowClassName,
+                    confirmedGroups, suspectedGroups, selectedSuspectedGroups, batchVerifySelected, handleSuspectedSelectionChange
+                };
+            }
+        });
+        
+        for (const [key, component] of Object.entries(ElementPlusIconsVue)) {
+            app.component(key, component);
+        }
+        app.use(ElementPlus);
+        app.mount('#app');
+    </script>
+</body>
+</html>
