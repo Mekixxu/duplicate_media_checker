@@ -4,15 +4,42 @@ import platform
 import logging
 import time
 import json
+import sys
 from flask import Flask, request, jsonify, render_template, send_from_directory
 from scan_manager import ScanManager
 
-app = Flask(__name__, template_folder='templates')
+# App Version
+__version__ = "0.0.4"
+
+# Configure logging to file
+log_file = os.path.join(os.getcwd(), 'duplicate_checker.log')
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(log_file, encoding='utf-8'),
+        logging.StreamHandler()
+    ]
+)
+
+logging.info(f"Starting Duplicate Media Checker v{__version__}")
+
+# PyInstaller resource path helper
+if getattr(sys, 'frozen', False):
+    # Running in PyInstaller bundle
+    # Templates are at the root of the bundle (see build.py)
+    template_dir = os.path.join(sys._MEIPASS, 'templates')
+else:
+    # Running in dev environment
+    # Templates are in the same directory as this script (movie_manager/templates)
+    template_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'templates')
+
+app = Flask(__name__, template_folder=template_dir)
 manager = ScanManager()
 
 @app.route('/')
 def index():
-    return send_from_directory('templates', 'report.html')
+    return send_from_directory(template_dir, 'report.html')
 
 @app.route('/api/scan/start', methods=['POST'])
 def start_scan():
