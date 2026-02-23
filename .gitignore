@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+build/
+dist/
+*.spec
+.venv/
+duplicate_checker.log
+version_info.txt
