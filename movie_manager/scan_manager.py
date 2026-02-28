@@ -9,6 +9,7 @@ from online import get_aliases_for_files
 from report import generate_report
 from send2trash import send2trash
 import os
+import json
 
 class ScanManager:
     # ... (existing code)
@@ -427,17 +428,29 @@ class ScanManager:
                 groups_to_process = [g for g in self.groups if g['id'] in target_set]
             
             total = len(groups_to_process)
+            id_to_split = {}
             for i, group in enumerate(groups_to_process):
                 if self._check_stop(): return
                 
                 self.message = f"Verifying group: {group['primary_name']}"
-                verify_group_deep(group)
+                splits = verify_group_deep(group)
+                id_to_split[group['id']] = splits
                 
                 self.progress = int((i + 1) / total * 100)
                 
             self.status = "completed"
             self.message = "Deep verification complete."
             self._log(f"Deep verified {total} groups.")
+            
+            if id_to_split:
+                processed_ids = set(id_to_split.keys())
+                new_groups = []
+                for g in self.groups:
+                    if g['id'] in processed_ids:
+                        new_groups.extend(id_to_split[g['id']])
+                    else:
+                        new_groups.append(g)
+                self.groups = new_groups
             
             # Update report
             generate_report(self.files, self.groups, self.output_file)
