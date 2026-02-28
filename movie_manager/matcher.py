@@ -274,51 +274,28 @@ def find_duplicates(files, aliases_map=None):
     return groups
 
 def verify_group_deep(group):
-    """
-    Performs deep content verification on a group.
-    Extracts first frame hash.
-    Returns updated group with 'confirmed' status if matches found.
-    """
     if len(group['files']) < 2:
-        return group
-        
-    # Calculate frame hashes
-    hashes = {}
-    
-    # We use the first file as the "pivot" usually, but here we want to find ANY matches within group
-    # Let's compute hash for all
+        for f in group['files']:
+            if 'content_hash' not in f:
+                f['content_hash'] = extract_first_frame_hash(f['path'])
+        return [group]
     for f in group['files']:
-        # If already has hash, skip (maybe useful later for caching)
         if 'content_hash' not in f:
-            h = extract_first_frame_hash(f['path'])
-            f['content_hash'] = h
-    
-    # Check if hashes match
-    # If all have same hash -> Confirmed
-    # If mixed -> Split group? Or just mark confirmed subset?
-    # Requirement: "If matched -> Confirmed Duplicate"
-    
-    # For simplicity, if the Pivot matches any other, we mark group as confirmed
-    # But ideally we should probably flag individual files
-    
-    pivot = group['files'][0]
-    pivot_hash = pivot.get('content_hash')
-    
-    if not pivot_hash:
-        return group # Failed to extract
-        
-    confirmed_count = 1 # Pivot itself
-    for f in group['files'][1:]:
-        if f.get('content_hash') == pivot_hash:
-            f['match_reason'].append('content_match')
-            confirmed_count += 1
-            
-    if confirmed_count > 1:
-        group['status'] = 'confirmed'
-        group['reasons'].append('content_match')
-    elif confirmed_count == 1 and len(group['files']) > 1:
-        # We checked files, but no matches found (other than self)
-        # Mark as mismatch so user knows we tried
-        group['status'] = 'content_mismatch'
-        
-    return group
+            f['content_hash'] = extract_first_frame_hash(f['path'])
+    buckets = {}
+    for f in group['files']:
+        h = f.get('content_hash')
+        buckets.setdefault(h, []).append(f)
+    new_groups = []
+    for h, flist in buckets.items():
+        status = 'confirmed' if (h is not None and len(flist) >= 2) else 'suspected'
+        reasons = ['content_match'] if (h is not None and len(flist) >= 2) else (['hash_failed'] if h is None else ['content_mismatch'])
+        new_groups.append({
+            'id': f"{group['id']}_h_{h if h is not None else 'none'}",
+            'files': flist,
+            'primary_name': flist[0]['filename'],
+            'status': status,
+            'reasons': reasons,
+            'total_size': sum(f.get('size', 0) for f in flist)
+        })
+    return new_groups
