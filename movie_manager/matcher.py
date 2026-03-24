@@ -268,6 +268,148 @@ def find_duplicates(files, aliases_map=None):
             
         i += 1
 
+    # --- Strategy 3: Name Similarity Window for Non-Media/Short Files (O(N log N)) ---
+    # For files skipped by Strategy 2 (duration < 120, typically non-media files)
+    # We sort them by size, and only compare names within a +/- 5% size window
+    remaining_indices = [i for i in range(len(files)) if i not in processed_indices]
+    if remaining_indices:
+        # Sort by size
+        sorted_by_size = sorted(remaining_indices, key=lambda i: files[i].get('size', 0))
+        
+        i = 0
+        while i < len(sorted_by_size):
+            current_idx = sorted_by_size[i]
+            if current_idx in processed_indices:
+                i += 1
+                continue
+                
+            current_file = files[current_idx]
+            s1 = current_file.get('size', 0)
+            
+            current_group_indices = [current_idx]
+            
+            j = i + 1
+            while j < len(sorted_by_size):
+                candidate_idx = sorted_by_size[j]
+                if candidate_idx in processed_indices:
+                    j += 1
+                    continue
+                    
+                candidate = files[candidate_idx]
+                s2 = candidate.get('size', 0)
+                
+                # Window condition: size diff <= 5% of s1
+                # If s1 is 0, exact match only
+                if s1 == 0:
+                    if s2 > 0:
+                        break
+                else:
+                    if (s2 - s1) / s1 > 0.05:
+                        break
+                        
+                # Check Name Similarity
+                ratio = fuzz.token_set_ratio(current_file['norm_name'], candidate['norm_name'])
+                
+                is_match = False
+                if ratio > 85:
+                    is_match = True
+                    candidate['match_reason'].append('name_fuzzy_size_window')
+                elif current_file['id_code'] and candidate['id_code'] and current_file['id_code'] == candidate['id_code']:
+                    is_match = True
+                    candidate['match_reason'].append('id_match_size_window')
+                    
+                if is_match:
+                    current_group_indices.append(candidate_idx)
+                    
+                j += 1
+                
+            if len(current_group_indices) > 1:
+                group_files = []
+                reasons = set()
+                for idx in current_group_indices:
+                    processed_indices.add(idx)
+                    f = files[idx]
+                    group_files.append(f)
+                    reasons.update(f['match_reason'])
+                
+                if not reasons: reasons.add('size_name_match')
+                
+                groups.append({
+                    'id': f"group_size_fuzzy_{s1}_{i}",
+                    'files': group_files,
+                    'primary_name': group_files[0]['filename'],
+                    'status': 'suspected',
+                    'reasons': list(reasons),
+                    'total_size': sum(f.get('size', 0) for f in group_files)
+                })
+                
+            i += 1
+
+    # --- Strategy 4: File Type Grouping + Pure Name Fuzzy Match (O(K * N^2)) ---
+    # Catch-all for files with the same/similar extension but vastly different sizes 
+    # (e.g. 200KB .html vs 26MB .mhtml of the same page).
+    remaining_indices = [i for i in range(len(files)) if i not in processed_indices]
+    if remaining_indices:
+        # 1. Group by logical file type
+        type_map = {}
+        for idx in remaining_indices:
+            ext = files[idx].get('extension', '').lower()
+            # Normalize web page extensions into a single category
+            if ext in ['.html', '.htm', '.mhtml', '.mht']:
+                group_key = 'web_page'
+            else:
+                group_key = ext
+            
+            type_map.setdefault(group_key, []).append(idx)
+            
+        # 2. Match within same type group ignoring size
+        for group_key, indices in type_map.items():
+            if len(indices) < 2:
+                continue
+                
+            local_processed = set()
+            for i in range(len(indices)):
+                idx1 = indices[i]
+                if idx1 in local_processed or idx1 in processed_indices:
+                    continue
+                    
+                current_file = files[idx1]
+                current_group_indices = [idx1]
+                
+                for j in range(i + 1, len(indices)):
+                    idx2 = indices[j]
+                    if idx2 in local_processed or idx2 in processed_indices:
+                        continue
+                        
+                    candidate = files[idx2]
+                    
+                    # Pure name match, no size or duration checks
+                    ratio = fuzz.token_set_ratio(current_file['norm_name'], candidate['norm_name'])
+                    if ratio > 85:
+                        current_group_indices.append(idx2)
+                        candidate['match_reason'].append('name_fuzzy_type_only')
+                        
+                if len(current_group_indices) > 1:
+                    group_files = []
+                    reasons = set()
+                    for idx in current_group_indices:
+                        processed_indices.add(idx)
+                        local_processed.add(idx)
+                        f = files[idx]
+                        group_files.append(f)
+                        reasons.update(f['match_reason'])
+                    
+                    if not reasons: reasons.add('type_name_match')
+                    
+                    groups.append({
+                        'id': f"group_type_fuzzy_{group_key}_{idx1}",
+                        'files': group_files,
+                        'primary_name': group_files[0]['filename'],
+                        'status': 'suspected',
+                        'reasons': list(reasons),
+                        'total_size': sum(f.get('size', 0) for f in group_files)
+                    })
+
     # Sort groups by total_size descending
     groups.sort(key=lambda x: x.get('total_size', 0), reverse=True)
 
