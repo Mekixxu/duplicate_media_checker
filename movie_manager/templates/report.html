@@ -13,40 +13,177 @@
     <script src="https://unpkg.com/@element-plus/icons-vue"></script>
     
     <style>
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 20px; background-color: #f5f7fa; color: #333; }
-        .container { max-width: 1600px; margin: 0 auto; }
-        
-        .section-card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 12px 0 rgba(0,0,0,0.05); margin-bottom: 20px; }
-        .section-title { font-size: 18px; font-weight: bold; margin-bottom: 15px; border-bottom: 1px solid #eee; padding-bottom: 10px; display: flex; justify-content: space-between; align-items: center; }
-        
-        .file-link { color: #409EFF; text-decoration: none; cursor: pointer; font-weight: 500; }
-        .file-link:hover { text-decoration: underline; }
-        
-        .log-window { background: #1e1e1e; color: #ddd; padding: 10px; border-radius: 4px; height: 100px; overflow-y: auto; font-family: Consolas, monospace; font-size: 12px; margin-top: 10px; }
-        .log-entry { margin-bottom: 2px; }
-        
-        .filter-row { display: flex; gap: 10px; margin-bottom: 10px; align-items: center; }
-        .filter-group { border: 1px solid #e4e7ed; padding: 10px; border-radius: 4px; background-color: #fafafa; margin-bottom: 10px; }
-        .filter-label { font-size: 14px; color: #606266; width: 80px; font-weight: 500; }
-        
+        /* Custom CSS for modern look */
+        :root {
+            --primary-color: #409EFF;
+            --bg-color: #f4f7f9;
+            --card-bg: #ffffff;
+            --text-main: #2c3e50;
+            --text-secondary: #606266;
+            --border-radius: 12px;
+            --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.04);
+            --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.08);
+            --transition: all 0.3s ease;
+        }
+
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; 
+            margin: 0; 
+            padding: 0 20px 40px; 
+            background-color: var(--bg-color); 
+            color: var(--text-main); 
+        }
+
+        .container { max-width: 1400px; margin: 0 auto; }
+
+        /* Header */
+        .page-header {
+            padding: 40px 0 30px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            text-align: center;
+        }
+        .page-header h1 {
+            margin: 15px 0 5px;
+            font-size: 28px;
+            font-weight: 600;
+            color: var(--text-main);
+            letter-spacing: 1px;
+        }
+        .page-header p {
+            margin: 0;
+            color: var(--text-secondary);
+            font-size: 15px;
+        }
+        .logo-icon {
+            font-size: 48px;
+            color: var(--primary-color);
+            background: white;
+            padding: 15px;
+            border-radius: 20px;
+            box-shadow: var(--shadow-sm);
+        }
+
+        /* Cards */
+        .section-card { 
+            background: var(--card-bg); 
+            padding: 24px 30px; 
+            border-radius: var(--border-radius); 
+            box-shadow: var(--shadow-sm); 
+            margin-bottom: 24px; 
+            transition: var(--transition);
+            border: 1px solid rgba(0,0,0,0.03);
+        }
+        .section-card:hover {
+            box-shadow: var(--shadow-md);
+        }
+
+        .section-title { 
+            font-size: 18px; 
+            font-weight: 600; 
+            margin-bottom: 20px; 
+            padding-bottom: 15px; 
+            border-bottom: 1px solid #f0f2f5; 
+            display: flex; 
+            justify-content: space-between; 
+            align-items: center; 
+            color: var(--text-main);
+        }
+        .section-title .el-icon {
+            margin-right: 8px;
+            color: var(--primary-color);
+            vertical-align: middle;
+        }
+
+        /* Links */
+        .file-link { color: var(--primary-color); text-decoration: none; cursor: pointer; font-weight: 500; transition: var(--transition); display: inline-flex; align-items: center; gap: 4px; }
+        .file-link:hover { opacity: 0.8; }
+
+        /* Log Window */
+        .log-window { 
+            background: #1e1e1e; 
+            color: #a9b7c6; 
+            padding: 15px; 
+            border-radius: 8px; 
+            height: 120px; 
+            overflow-y: auto; 
+            font-family: 'Fira Code', Consolas, monospace; 
+            font-size: 13px; 
+            margin-top: 15px; 
+            box-shadow: inset 0 2px 4px rgba(0,0,0,0.2);
+        }
+        .log-window::-webkit-scrollbar { width: 8px; }
+        .log-window::-webkit-scrollbar-track { background: #1e1e1e; }
+        .log-window::-webkit-scrollbar-thumb { background: #555; border-radius: 4px; }
+        .log-entry { margin-bottom: 4px; line-height: 1.4; }
+
+        /* Filters */
+        .filter-group { 
+            background-color: #f8fafc; 
+            border-radius: 8px; 
+            padding: 20px; 
+            margin-bottom: 20px; 
+            border: 1px solid #ebeef5;
+        }
+        .filter-row { display: flex; gap: 12px; margin-bottom: 12px; align-items: center; flex-wrap: wrap; }
+        .filter-row:last-child { margin-bottom: 0; }
+        .filter-label { font-size: 14px; color: var(--text-secondary); width: 80px; font-weight: 500; }
+
+        /* Utilities */
         .w-100 { width: 100%; }
         .flex-center { display: flex; justify-content: center; align-items: center; }
         .mt-10 { margin-top: 10px; }
         .ml-10 { margin-left: 10px; }
-        
-        .scan-btn-large { width: 200px; height: 50px; font-size: 18px; }
+
+        /* Big Buttons */
+        .scan-btn-large { 
+            width: 220px; 
+            height: 54px; 
+            font-size: 18px; 
+            border-radius: 27px; 
+            font-weight: 600;
+            letter-spacing: 1px;
+            box-shadow: 0 6px 16px rgba(64,158,255,0.3); 
+            transition: var(--transition); 
+        }
+        .scan-btn-large:hover { 
+            transform: translateY(-2px); 
+            box-shadow: 0 8px 20px rgba(64,158,255,0.4); 
+        }
+        .stop-btn-large {
+            height: 54px;
+            border-radius: 27px;
+            padding: 0 30px;
+            font-weight: 600;
+            box-shadow: 0 6px 16px rgba(245,108,108,0.3);
+        }
+
         .progress-container { margin-top: 20px; margin-bottom: 20px; }
-        
+
+        /* Table Adjustments */
+        .el-table { border-radius: 8px; overflow: hidden; }
+        .el-table th.el-table__cell { background-color: #f8fafc !important; color: var(--text-main); font-weight: 600; }
+
         .config-actions { display: flex; gap: 10px; align-items: center; }
         .config-actions .el-upload { display: inline-flex; margin: 0; padding: 0; line-height: 1; vertical-align: middle; }
         .config-actions .el-upload .el-button { margin: 0; }
-        
-        .excluded-row { opacity: 0.6; background-color: #f5f7fa !important; }
-        .excluded-row .el-table__cell { color: #909399; }
+
+        .excluded-row { opacity: 0.5; background-color: #fafafa !important; }
+        .excluded-row .el-table__cell { color: #a8abb2; text-decoration: line-through; }
     </style>
 </head>
 <body>
     <div id="app" class="container">
+        <!-- Page Header -->
+        <div class="page-header">
+            <div class="logo-icon">
+                <el-icon><Video-Camera-Filled /></el-icon>
+            </div>
+            <h1>电影文件管理中心</h1>
+            <p>智能扫描、重复检测与整理工具</p>
+        </div>
+
         <!-- Hidden data for offline report mode -->
         <script id="embedded-data-files" type="application/json">(( files_json | default('null') ))</script>
         <script id="embedded-data-groups" type="application/json">(( groups_json | default('null') ))</script>
@@ -56,8 +193,8 @@
             <div class="section-title">
                 <span><el-icon><Setting /></el-icon> 扫描配置</span>
                 <div class="config-actions">
-                    <el-button size="small" @click="saveConfig">保存配置</el-button>
-                    <el-button size="small" @click="exportConfig">导出配置</el-button>
+                    <el-button size="small" @click="saveConfig"><el-icon><Check /></el-icon> 保存配置</el-button>
+                    <el-button size="small" @click="exportConfig"><el-icon><Download /></el-icon> 导出配置</el-button>
                     <div style="display: inline-flex; align-items: center;">
                         <el-upload
                             action=""
@@ -66,7 +203,7 @@
                             :on-change="importConfig"
                             accept=".json"
                         >
-                            <el-button size="small">导入配置</el-button>
+                            <el-button size="small"><el-icon><Upload /></el-icon> 导入配置</el-button>
                         </el-upload>
                     </div>
                 </div>
@@ -94,12 +231,18 @@
         </div>
 
         <!-- 2. 扫描控制与进度 -->
-        <div class="flex-center" style="margin-bottom: 20px;">
+        <div class="flex-center" style="margin-bottom: 30px;">
             <el-button type="primary" class="scan-btn-large" @click="startScan" :loading="isBusy" :disabled="isBusy">
-                <span v-if="!isBusy">开始扫描</span>
+                <span v-if="!isBusy">
+                    <el-icon style="margin-right: 5px; vertical-align: middle;"><Video-Play /></el-icon>
+                    开始扫描
+                </span>
                 <span v-else>扫描中...</span>
             </el-button>
-            <el-button v-if="isBusy" type="danger" @click="stopScan" style="margin-left: 20px; height: 50px;">停止</el-button>
+            <el-button v-if="isBusy" type="danger" class="stop-btn-large" @click="stopScan" style="margin-left: 20px;">
+                <el-icon style="margin-right: 5px; vertical-align: middle;"><Video-Pause /></el-icon>
+                停止
+            </el-button>
         </div>
 
         <div class="section-card progress-container" v-if="status && (isBusy || status.progress > 0)">
@@ -224,9 +367,12 @@
         <div class="section-card" v-show="suspectedGroups.length > 0">
             <div class="section-title">
                 <span><el-icon><Files /></el-icon> 疑似重复分组 (<span v-text="suspectedGroups.length"></span> 组)</span>
-                <div>
+                <div style="display: flex; gap: 10px; align-items: center;">
                      <el-button type="primary" size="small" :disabled="selectedSuspectedGroups.length === 0" @click="batchVerifySelected">
-                        批量验证Hash选中 (<span v-text="selectedSuspectedGroups.length"></span>)
+                        <el-icon><Cpu /></el-icon> 批量验证Hash选中 (<span v-text="selectedSuspectedGroups.length"></span>)
+                    </el-button>
+                    <el-button type="danger" size="small" :disabled="globalSelectedUuids.length === 0" @click="globalBatchDelete">
+                        <el-icon><Delete /></el-icon> 全局删除选中文件 (<span v-text="globalSelectedUuids.length"></span>)
                     </el-button>
                 </div>
             </div>
@@ -236,19 +382,19 @@
                 <el-table-column type="expand">
                     <template #default="props">
                         <!-- Nested table for group files -->
-                        <div style="padding: 10px; background: #fdf6ec;">
-                            <div style="margin-bottom: 10px; display: flex; justify-content: space-between;">
+                        <div style="padding: 16px; background: #fdf6ec; border-radius: 8px; margin: 8px;">
+                            <div style="margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center;">
                                  <div>
                                     <span style="font-weight: bold;">匹配原因:</span>
                                     <el-tag v-for="r in (props.row.reasons || [])" :key="r" size="small" style="margin-left: 5px;" v-text="r"></el-tag>
                                  </div>
                                  <div>
-                                    <el-button type="primary" size="small" @click="startDeepVerify(props.row.id)" v-if="props.row.status !== 'confirmed'">验证Hash</el-button>
+                                    <el-button type="primary" size="small" @click="startDeepVerify(props.row.id)" v-if="props.row.status !== 'confirmed'"><el-icon><Cpu /></el-icon> 验证Hash</el-button>
                                     <el-button type="info" size="small" :disabled="selectedInGroup(props.row.id).length === 0" @click="batchExclude(props.row.id)">
-                                        排除选中 (<span v-text="selectedInGroup(props.row.id).length"></span>)
+                                        <el-icon><Remove /></el-icon> 排除选中 (<span v-text="selectedInGroup(props.row.id).length"></span>)
                                     </el-button>
                                     <el-button type="danger" size="small" :disabled="selectedInGroup(props.row.id).length === 0" @click="batchDelete(props.row.id)">
-                                        删除选中 (<span v-text="selectedInGroup(props.row.id).length"></span>)
+                                        <el-icon><Delete /></el-icon> 删除选中 (<span v-text="selectedInGroup(props.row.id).length"></span>)
                                     </el-button>
                                  </div>
                             </div>
@@ -271,10 +417,10 @@
                                     <template #default="scope"><span v-text="formatDuration(scope.row.duration)"></span></template>
                                 </el-table-column>
                                 <el-table-column prop="path" label="路径"></el-table-column>
-                                <el-table-column width="200" label="操作">
+                                <el-table-column width="210" label="操作">
                                      <template #default="scope">
-                                        <el-button type="danger" size="small" @click="deleteFile(scope.row.uuid)" :disabled="scope.row.excluded">删除</el-button>
-                                        <el-button type="primary" size="small" @click="deleteOthers(props.row.id, scope.row.uuid)" :disabled="scope.row.excluded">保留此文件</el-button>
+                                        <el-button type="danger" size="small" @click="deleteFile(scope.row.uuid)" :disabled="scope.row.excluded"><el-icon><Delete /></el-icon> 删除</el-button>
+                                        <el-button type="primary" size="small" @click="deleteOthers(props.row.id, scope.row.uuid)" :disabled="scope.row.excluded"><el-icon><Select /></el-icon> 保留此文件</el-button>
                                     </template>
                                 </el-table-column>
                             </el-table>
@@ -305,24 +451,29 @@
         <div class="section-card" v-show="confirmedGroups.length > 0">
             <div class="section-title">
                 <span><el-icon><Check /></el-icon> 确定重复分组 (<span v-text="confirmedGroups.length"></span> 组)</span>
+                <div>
+                    <el-button type="danger" size="small" :disabled="globalSelectedUuids.length === 0" @click="globalBatchDelete">
+                        <el-icon><Delete /></el-icon> 全局删除选中文件 (<span v-text="globalSelectedUuids.length"></span>)
+                    </el-button>
+                </div>
             </div>
             
             <el-table :data="confirmedGroups" style="width: 100%" border stripe size="small" :default-sort="{prop: 'total_size', order: 'descending'}">
                 <el-table-column type="expand">
                     <template #default="props">
                         <!-- Nested table for confirmed group files -->
-                        <div style="padding: 10px; background: #f0f9eb;">
-                            <div style="margin-bottom: 10px; display: flex; justify-content: space-between;">
+                        <div style="padding: 16px; background: #f0f9eb; border-radius: 8px; margin: 8px;">
+                            <div style="margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center;">
                                  <div>
                                     <span style="font-weight: bold;">匹配原因:</span>
                                     <el-tag v-for="r in (props.row.reasons || [])" :key="r" size="small" style="margin-left: 5px;" v-text="r"></el-tag>
                                  </div>
                                  <div>
                                     <el-button type="info" size="small" :disabled="selectedInGroup(props.row.id).length === 0" @click="batchExclude(props.row.id)">
-                                        排除选中 (<span v-text="selectedInGroup(props.row.id).length"></span>)
+                                        <el-icon><Remove /></el-icon> 排除选中 (<span v-text="selectedInGroup(props.row.id).length"></span>)
                                     </el-button>
                                     <el-button type="danger" size="small" :disabled="selectedInGroup(props.row.id).length === 0" @click="batchDelete(props.row.id)">
-                                        删除选中 (<span v-text="selectedInGroup(props.row.id).length"></span>)
+                                        <el-icon><Delete /></el-icon> 删除选中 (<span v-text="selectedInGroup(props.row.id).length"></span>)
                                     </el-button>
                                  </div>
                             </div>
@@ -345,10 +496,10 @@
                                     <template #default="scope"><span v-text="formatDuration(scope.row.duration)"></span></template>
                                 </el-table-column>
                                 <el-table-column prop="path" label="路径"></el-table-column>
-                                <el-table-column width="200" label="操作">
+                                <el-table-column width="210" label="操作">
                                      <template #default="scope">
-                                        <el-button type="danger" size="small" @click="deleteFile(scope.row.uuid)" :disabled="scope.row.excluded">删除</el-button>
-                                        <el-button type="primary" size="small" @click="deleteOthers(props.row.id, scope.row.uuid)" :disabled="scope.row.excluded">保留此文件</el-button>
+                                        <el-button type="danger" size="small" @click="deleteFile(scope.row.uuid)" :disabled="scope.row.excluded"><el-icon><Delete /></el-icon> 删除</el-button>
+                                        <el-button type="primary" size="small" @click="deleteOthers(props.row.id, scope.row.uuid)" :disabled="scope.row.excluded"><el-icon><Select /></el-icon> 保留此文件</el-button>
                                     </template>
                                 </el-table-column>
                             </el-table>
@@ -839,6 +990,33 @@
                     return filteredFiles.value.slice(start, end);
                 });
                 
+                const globalSelectedUuids = computed(() => {
+                    let uuids = [];
+                    groups.value.forEach(g => {
+                        const selection = groupSelections.value[g.id];
+                        if (selection && selection.length > 0) {
+                            uuids.push(...selection.map(f => f.uuid));
+                        }
+                    });
+                    return uuids;
+                });
+
+                const globalBatchDelete = async () => {
+                    const uuids = globalSelectedUuids.value;
+                    if (uuids.length === 0) return;
+                    try {
+                        await ElementPlus.ElMessageBox.confirm(`确定要全局删除跨组选中的 ${uuids.length} 个文件吗?`, '警告', { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' });
+                        const res = await fetch('/api/files/batch_delete', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ uuids: uuids }) });
+                        const data = await res.json();
+                        if (data.success) { 
+                            ElementPlus.ElMessage.success('批量删除成功'); 
+                            fetchData(); 
+                            groupSelections.value = {}; 
+                        }
+                        else { ElementPlus.ElMessage.error(data.message); }
+                    } catch (e) { if(e!=='cancel') console.error(e); }
+                };
+
                 const confirmedGroups = computed( () => {
                     return groups.value.filter(g => g.status === 'confirmed');
                 });
@@ -860,7 +1038,8 @@
                     openFile, revealFile, formatDuration, deleteFile, deleteOthers,
                     handleSelectionChange, selectedInGroup, batchDelete, batchExclude, handleFileSelection,
                     saveConfig, exportConfig, importConfig, applyFilters, startDeepVerify, tableRowClassName,
-                    confirmedGroups, suspectedGroups, selectedSuspectedGroups, batchVerifySelected, handleSuspectedSelectionChange
+                    confirmedGroups, suspectedGroups, selectedSuspectedGroups, batchVerifySelected, handleSuspectedSelectionChange,
+                    globalSelectedUuids, globalBatchDelete
                 };
             }
         });
