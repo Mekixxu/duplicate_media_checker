@@ -56,11 +56,22 @@ def parse_duration_str(time_str):
         
     return 0.0
 
+# Common video extensions that ffprobe should process
+VIDEO_EXTENSIONS_FOR_FFPROBE = {
+    '.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm',
+    '.m4v', '.mpg', '.mpeg', '.3gp', '.ts', '.vob'
+}
+
 def get_duration_ffprobe(file_path):
     """
     Uses ffprobe to get the duration of a video file.
     Returns duration in seconds (float).
     """
+    # Skip ffprobe for non-video files to save time and avoid errors
+    _, ext = os.path.splitext(file_path)
+    if ext.lower() not in VIDEO_EXTENSIONS_FOR_FFPROBE:
+        return 0.0
+
     ffprobe_exe = get_ffprobe_path()
     if not ffprobe_exe:
         return 0
