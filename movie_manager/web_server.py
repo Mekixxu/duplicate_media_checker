@@ -9,7 +9,7 @@ from flask import Flask, request, jsonify, render_template, send_from_directory
 from scan_manager import ScanManager
 
 # App Version
-__version__ = "0.0.5"
+__version__ = "0.0.6"
 
 # Configure logging to file
 log_file = os.path.join(os.getcwd(), 'duplicate_checker.log')

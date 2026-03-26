@@ -8,8 +8,8 @@ def generate_report(files, groups, output_file):
     """
     env = Environment(
         loader=FileSystemLoader(os.path.join(os.path.dirname(__file__), 'templates')),
-        variable_start_string='((', 
-        variable_end_string='))'
+        variable_start_string='[[[',
+        variable_end_string=']]]'
     )
     template = env.get_template('report.html')
     
