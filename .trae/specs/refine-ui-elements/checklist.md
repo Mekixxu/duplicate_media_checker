@@ -1,0 +1,4 @@
+- [x] `movie_manager/templates/report.html` 中所有原有的“全局删除选中文件”文本已修改为“删除全部选中文件”。
+- [x] `movie_report.html` 中所有原有的“全局删除选中文件”文本已修改为“删除全部选中文件”。
+- [x] `movie_manager/templates/report.html` 中新增了针对 `.el-checkbox` 的 CSS，用于扩大表格复选框的点击区域或大小。
+- [x] `movie_report.html` 中新增了针对 `.el-checkbox` 的 CSS，用于扩大表格复选框的点击区域或大小。

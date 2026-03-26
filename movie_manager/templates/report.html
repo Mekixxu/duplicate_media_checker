@@ -171,6 +171,15 @@
 
         .excluded-row { opacity: 0.5; background-color: #fafafa !important; }
         .excluded-row .el-table__cell { color: #a8abb2; text-decoration: line-through; }
+
+        /* 增大复选框点击区域 */
+        .el-checkbox {
+            padding: 6px 10px;
+            margin-right: 15px;
+        }
+        .el-checkbox__input {
+            transform: scale(1.15);
+        }
     </style>
 </head>
 <body>
@@ -185,8 +194,8 @@
         </div>
 
         <!-- Hidden data for offline report mode -->
-        <script id="embedded-data-files" type="application/json">(( files_json | default('null') ))</script>
-        <script id="embedded-data-groups" type="application/json">(( groups_json | default('null') ))</script>
+        <script id="embedded-data-files" type="application/json">[[[ files_json | default('null') ]]]</script>
+        <script id="embedded-data-groups" type="application/json">[[[ groups_json | default('null') ]]]</script>
         
         <!-- 1. 扫描配置 -->
         <div class="section-card">
@@ -368,17 +377,26 @@
             <div class="section-title">
                 <span><el-icon><Files /></el-icon> 疑似重复分组 (<span v-text="suspectedGroups.length"></span> 组)</span>
                 <div style="display: flex; gap: 10px; align-items: center;">
-                     <el-button type="primary" size="small" :disabled="selectedSuspectedGroups.length === 0" @click="batchVerifySelected">
-                        <el-icon><Cpu /></el-icon> 批量验证Hash选中 (<span v-text="selectedSuspectedGroups.length"></span>)
+                     <el-tag size="small" type="info">已展开 <span v-text="expandedSuspectedCount"></span>/<span v-text="suspectedGroups.length"></span></el-tag>
+                     <el-button-group>
+                        <el-button size="small" :disabled="suspectedGroups.length === 0" @click="expandAllSuspectedGroups">
+                            <el-icon><ArrowDown /></el-icon> 展开全部
+                        </el-button>
+                        <el-button size="small" :disabled="suspectedGroups.length === 0" @click="collapseAllSuspectedGroups">
+                            <el-icon><ArrowUp /></el-icon> 折叠全部
+                        </el-button>
+                    </el-button-group>
+                     <el-button type="primary" size="small" :disabled="selectedSuspectedGroupIds.length === 0" @click="batchVerifySelected">
+                        <el-icon><Cpu /></el-icon> 批量验证Hash选中 (<span v-text="selectedSuspectedGroupIds.length"></span>)
                     </el-button>
                     <el-button type="danger" size="small" :disabled="globalSelectedUuids.length === 0" @click="globalBatchDelete">
-                        <el-icon><Delete /></el-icon> 全局删除选中文件 (<span v-text="globalSelectedUuids.length"></span>)
+                        <el-icon><Delete /></el-icon> 删除全部选中文件 (<span v-text="globalSelectedUuids.length"></span>)
                     </el-button>
                 </div>
             </div>
             
-            <el-table :data="suspectedGroups" style="width: 100%" border stripe size="small" :default-sort="{prop: 'total_size', order: 'descending'}" @selection-change="handleSuspectedSelectionChange">
-                <el-table-column type="selection" width="55"></el-table-column>
+            <el-table ref="suspectedGroupsTableRef" :data="suspectedGroups" style="width: 100%" border stripe size="small" row-key="id" :expand-row-keys="expandedSuspectedGroupIds" :default-sort="{prop: 'total_size', order: 'descending'}" @selection-change="handleSuspectedSelectionChange" @expand-change="handleSuspectedExpandChange">
+                <el-table-column type="selection" width="55" :reserve-selection="true"></el-table-column>
                 <el-table-column type="expand">
                     <template #default="props">
                         <!-- Nested table for group files -->
@@ -399,8 +417,8 @@
                                  </div>
                             </div>
                             
-                            <el-table :data="props.row.files" border size="small" @selection-change="(val) => handleSelectionChange(props.row.id, val)" :row-class-name="tableRowClassName">
-                                <el-table-column type="selection" width="55"></el-table-column>
+                            <el-table :ref="(el) => setNestedTableRef(props.row.id, el)" :data="props.row.files" border size="small" row-key="uuid" @selection-change="(val) => handleSelectionChange(props.row.id, val)" :row-class-name="tableRowClassName">
+                                <el-table-column type="selection" width="55" :reserve-selection="true"></el-table-column>
                                 <el-table-column prop="filename" label="文件名" min-width="250">
                                      <template #default="scope">
                                         <span class="file-link" @click="openFile(scope.row.path)" v-text="scope.row.filename"></span>
@@ -451,14 +469,23 @@
         <div class="section-card" v-show="confirmedGroups.length > 0">
             <div class="section-title">
                 <span><el-icon><Check /></el-icon> 确定重复分组 (<span v-text="confirmedGroups.length"></span> 组)</span>
-                <div>
+                <div style="display: flex; gap: 10px; align-items: center;">
+                    <el-tag size="small" type="info">已展开 <span v-text="expandedConfirmedCount"></span>/<span v-text="confirmedGroups.length"></span></el-tag>
+                    <el-button-group>
+                        <el-button size="small" :disabled="confirmedGroups.length === 0" @click="expandAllConfirmedGroups">
+                            <el-icon><ArrowDown /></el-icon> 展开全部
+                        </el-button>
+                        <el-button size="small" :disabled="confirmedGroups.length === 0" @click="collapseAllConfirmedGroups">
+                            <el-icon><ArrowUp /></el-icon> 折叠全部
+                        </el-button>
+                    </el-button-group>
                     <el-button type="danger" size="small" :disabled="globalSelectedUuids.length === 0" @click="globalBatchDelete">
-                        <el-icon><Delete /></el-icon> 全局删除选中文件 (<span v-text="globalSelectedUuids.length"></span>)
+                        <el-icon><Delete /></el-icon> 删除全部选中文件 (<span v-text="globalSelectedUuids.length"></span>)
                     </el-button>
                 </div>
             </div>
             
-            <el-table :data="confirmedGroups" style="width: 100%" border stripe size="small" :default-sort="{prop: 'total_size', order: 'descending'}">
+            <el-table :data="confirmedGroups" style="width: 100%" border stripe size="small" row-key="id" :expand-row-keys="expandedConfirmedGroupIds" :default-sort="{prop: 'total_size', order: 'descending'}" @expand-change="handleConfirmedExpandChange">
                 <el-table-column type="expand">
                     <template #default="props">
                         <!-- Nested table for confirmed group files -->
@@ -478,8 +505,8 @@
                                  </div>
                             </div>
                             
-                            <el-table :data="props.row.files" border size="small" @selection-change="(val) => handleSelectionChange(props.row.id, val)" :row-class-name="tableRowClassName">
-                                <el-table-column type="selection" width="55"></el-table-column>
+                            <el-table :ref="(el) => setNestedTableRef(props.row.id, el)" :data="props.row.files" border size="small" row-key="uuid" @selection-change="(val) => handleSelectionChange(props.row.id, val)" :row-class-name="tableRowClassName">
+                                <el-table-column type="selection" width="55" :reserve-selection="true"></el-table-column>
                                 <el-table-column prop="filename" label="文件名" min-width="250">
                                      <template #default="scope">
                                         <span class="file-link" @click="openFile(scope.row.path)" v-text="scope.row.filename"></span>
@@ -537,7 +564,13 @@
                 const groups = ref([]);
                 const isBusy = ref(false);
                 const groupSelections = ref({});
-                const selectedSuspectedGroups = ref([]); // Selection for suspected table
+                const selectedSuspectedGroupIds = ref([]);
+                const expandedSuspectedGroupIds = ref([]);
+                const expandedConfirmedGroupIds = ref([]);
+                const keepSuspectedExpandedAll = ref(false);
+                const keepConfirmedExpandedAll = ref(false);
+                const nestedTableRefs = ref({});
+                const suspectedGroupsTableRef = ref(null);
                 
                 const config = ref({
                     paths: 'D:\\Movies',
@@ -708,19 +741,20 @@
                         const embeddedFiles = document.getElementById('embedded-data-files').textContent;
                         const embeddedGroups = document.getElementById('embedded-data-groups').textContent;
                         
-                        // Check if it's the raw template placeholder (Web Mode)
-                        // Use string literal to avoid Jinja2 parsing confusion
-                        const rawPlaceholder = "(( files_json | default('null') ))";
-                        if (embeddedFiles.trim() !== rawPlaceholder && embeddedFiles.trim() !== 'null') {
+                        if (embeddedFiles.trim() !== 'null') {
                             const filesData = JSON.parse(embeddedFiles);
                             const groupsData = JSON.parse(embeddedGroups);
                             
                             if (filesData) {
+                                const expandedIds = new Set([...expandedSuspectedGroupIds.value, ...expandedConfirmedGroupIds.value]);
                                 files.value = filesData;
                                 groups.value = groupsData || [];
+                                syncExpandedGroups(expandedIds);
                                 if (filteredFiles.value.length === 0 && files.value.length > 0) {
                                     filteredFiles.value = files.value;
                                 }
+                                await nextTick();
+                                restoreSelectionState();
                                 return; // Stop here if data loaded from HTML
                             }
                         }
@@ -745,13 +779,17 @@
                         
                         try {
                             const data = JSON.parse(text);
+                            const expandedIds = new Set([...expandedSuspectedGroupIds.value, ...expandedConfirmedGroupIds.value]);
                             files.value = data.files;
                             groups.value = data.groups;
+                            syncExpandedGroups(expandedIds);
                             
                             // If filteredFiles is empty (first load), init it
                             if (filteredFiles.value.length === 0 && files.value.length > 0) {
                                 filteredFiles.value = files.value;
                             }
+                            await nextTick();
+                            restoreSelectionState();
                         } catch (parseErr) {
                             console.error("JSON Parse Error. Substring around error:", text.substring(0, 100)); 
                             throw parseErr;
@@ -856,8 +894,8 @@
                 };
 
                 const batchVerifySelected = async () => {
-                    if (selectedSuspectedGroups.value.length === 0) return;
-                    const groupIds = selectedSuspectedGroups.value.map(g => g.id);
+                    if (selectedSuspectedGroupIds.value.length === 0) return;
+                    const groupIds = [...selectedSuspectedGroupIds.value];
                     try {
                         const res = await fetch('/api/match/deep', {
                             method: 'POST',
@@ -868,7 +906,7 @@
                         if (data.success) { 
                             isBusy.value = true; 
                             startPolling(); 
-                            selectedSuspectedGroups.value = []; // Clear selection
+                            selectedSuspectedGroupIds.value = [];
                         }
                         else { ElementPlus.ElMessage.error(data.message); }
                     } catch (e) { ElementPlus.ElMessage.error(e); }
@@ -898,7 +936,7 @@
                 };
                 
                 const batchDelete = async (groupId) => {
-                    const selection = groupSelections.value[groupId];
+                    const selection = selectedInGroup(groupId);
                     if (!selection || selection.length === 0) return;
                     try {
                         await ElementPlus.ElMessageBox.confirm(`删除选中的 ${selection.length} 个文件?`, '警告', { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' });
@@ -911,7 +949,7 @@
                 };
 
                 const batchExclude = async (groupId) => {
-                    const selection = groupSelections.value[groupId];
+                    const selection = selectedInGroup(groupId);
                     if (!selection || selection.length === 0) return;
                     try {
                         await ElementPlus.ElMessageBox.confirm(`排除选中的 ${selection.length} 个文件? 以后将不再提示重复。`, '提示', { confirmButtonText: '排除', cancelButtonText: '取消', type: 'info' });
@@ -930,10 +968,95 @@
                     return '';
                 };
 
-                const handleSelectionChange = (groupId, selection) => { groupSelections.value[groupId] = selection; };
-                const selectedInGroup = (groupId) => groupSelections.value[groupId] || [];
+                const normalizeIds = (ids) => Array.from(new Set((ids || []).map(id => String(id))));
+                const syncExpandedGroups = (expandedIds) => {
+                    const ids = normalizeIds(Array.from(expandedIds || []));
+                    const suspectedIds = normalizeIds(suspectedGroups.value.map(g => g.id));
+                    const confirmedIds = normalizeIds(confirmedGroups.value.map(g => g.id));
+                    if (keepSuspectedExpandedAll.value) {
+                        expandedSuspectedGroupIds.value = suspectedIds;
+                    } else {
+                        const suspectedIdSet = new Set(suspectedIds);
+                        expandedSuspectedGroupIds.value = ids.filter(id => suspectedIdSet.has(id));
+                    }
+                    if (keepConfirmedExpandedAll.value) {
+                        expandedConfirmedGroupIds.value = confirmedIds;
+                    } else {
+                        const confirmedIdSet = new Set(confirmedIds);
+                        expandedConfirmedGroupIds.value = ids.filter(id => confirmedIdSet.has(id));
+                    }
+                };
+                const setNestedTableRef = (groupId, el) => {
+                    if (!groupId) return;
+                    if (el) {
+                        nestedTableRefs.value[groupId] = el;
+                        return;
+                    }
+                    delete nestedTableRefs.value[groupId];
+                };
+                const restoreSelectionState = () => {
+                    groups.value.forEach(group => {
+                        const tableRef = nestedTableRefs.value[group.id];
+                        if (!tableRef || typeof tableRef.clearSelection !== 'function') return;
+                        const selectedUuids = new Set(groupSelections.value[group.id] || []);
+                        tableRef.clearSelection();
+                        group.files.forEach(file => {
+                            if (selectedUuids.has(file.uuid)) {
+                                tableRef.toggleRowSelection(file, true);
+                            }
+                        });
+                    });
+                    if (suspectedGroupsTableRef.value && typeof suspectedGroupsTableRef.value.clearSelection === 'function') {
+                        const selectedGroupIds = new Set(selectedSuspectedGroupIds.value);
+                        suspectedGroupsTableRef.value.clearSelection();
+                        suspectedGroups.value.forEach(group => {
+                            if (selectedGroupIds.has(String(group.id))) {
+                                suspectedGroupsTableRef.value.toggleRowSelection(group, true);
+                            }
+                        });
+                    }
+                };
+                const handleSelectionChange = (groupId, selection) => {
+                    groupSelections.value[groupId] = normalizeIds(selection.map(item => item.uuid));
+                };
+                const selectedInGroup = (groupId) => {
+                    const group = groups.value.find(item => item.id === groupId);
+                    if (!group) return [];
+                    const selectedUuids = new Set(groupSelections.value[groupId] || []);
+                    return group.files.filter(file => selectedUuids.has(file.uuid));
+                };
                 const handleFileSelection = (val) => { fileSelection.value = val; };
-                const handleSuspectedSelectionChange = (val) => { selectedSuspectedGroups.value = val; };
+                const handleSuspectedSelectionChange = (val) => {
+                    selectedSuspectedGroupIds.value = normalizeIds(val.map(item => item.id));
+                };
+                const handleSuspectedExpandChange = (row, expandedRows) => {
+                    const expandedIds = normalizeIds((expandedRows || []).map(item => item.id));
+                    expandedSuspectedGroupIds.value = expandedIds;
+                    const allIds = normalizeIds(suspectedGroups.value.map(item => item.id));
+                    keepSuspectedExpandedAll.value = allIds.length > 0 && expandedIds.length === allIds.length;
+                };
+                const handleConfirmedExpandChange = (row, expandedRows) => {
+                    const expandedIds = normalizeIds((expandedRows || []).map(item => item.id));
+                    expandedConfirmedGroupIds.value = expandedIds;
+                    const allIds = normalizeIds(confirmedGroups.value.map(item => item.id));
+                    keepConfirmedExpandedAll.value = allIds.length > 0 && expandedIds.length === allIds.length;
+                };
+                const expandAllSuspectedGroups = () => {
+                    keepSuspectedExpandedAll.value = true;
+                    expandedSuspectedGroupIds.value = normalizeIds(suspectedGroups.value.map(item => item.id));
+                };
+                const collapseAllSuspectedGroups = () => {
+                    keepSuspectedExpandedAll.value = false;
+                    expandedSuspectedGroupIds.value = [];
+                };
+                const expandAllConfirmedGroups = () => {
+                    keepConfirmedExpandedAll.value = true;
+                    expandedConfirmedGroupIds.value = normalizeIds(confirmedGroups.value.map(item => item.id));
+                };
+                const collapseAllConfirmedGroups = () => {
+                    keepConfirmedExpandedAll.value = false;
+                    expandedConfirmedGroupIds.value = [];
+                };
 
                 // --- Helpers ---
                 const startPolling = () => {
@@ -990,15 +1113,15 @@
                     return filteredFiles.value.slice(start, end);
                 });
                 
-                const globalSelectedUuids = computed(() => {
+                const globalSelectedUuids = computed(function() {
                     let uuids = [];
                     groups.value.forEach(g => {
                         const selection = groupSelections.value[g.id];
                         if (selection && selection.length > 0) {
-                            uuids.push(...selection.map(f => f.uuid));
+                            uuids.push(...selection);
                         }
                     });
-                    return uuids;
+                    return normalizeIds(uuids);
                 });
 
                 const globalBatchDelete = async () => {
@@ -1011,7 +1134,6 @@
                         if (data.success) { 
                             ElementPlus.ElMessage.success('批量删除成功'); 
                             fetchData(); 
-                            groupSelections.value = {}; 
                         }
                         else { ElementPlus.ElMessage.error(data.message); }
                     } catch (e) { if(e!=='cancel') console.error(e); }
@@ -1023,6 +1145,12 @@
                 
                 const suspectedGroups = computed( () => {
                     return groups.value.filter(g => g.status !== 'confirmed');
+                });
+                const expandedSuspectedCount = computed(function() {
+                    return expandedSuspectedGroupIds.value.length;
+                });
+                const expandedConfirmedCount = computed(function() {
+                    return expandedConfirmedGroupIds.value.length;
                 });
 
                 onMounted(function() {
@@ -1038,8 +1166,11 @@
                     openFile, revealFile, formatDuration, deleteFile, deleteOthers,
                     handleSelectionChange, selectedInGroup, batchDelete, batchExclude, handleFileSelection,
                     saveConfig, exportConfig, importConfig, applyFilters, startDeepVerify, tableRowClassName,
-                    confirmedGroups, suspectedGroups, selectedSuspectedGroups, batchVerifySelected, handleSuspectedSelectionChange,
-                    globalSelectedUuids, globalBatchDelete
+                    confirmedGroups, suspectedGroups, selectedSuspectedGroupIds, batchVerifySelected, handleSuspectedSelectionChange,
+                    globalSelectedUuids, globalBatchDelete, expandedSuspectedGroupIds, expandedConfirmedGroupIds,
+                    handleSuspectedExpandChange, handleConfirmedExpandChange, setNestedTableRef, suspectedGroupsTableRef,
+                    expandAllSuspectedGroups, expandAllConfirmedGroups, collapseAllSuspectedGroups, collapseAllConfirmedGroups,
+                    expandedSuspectedCount, expandedConfirmedCount
                 };
             }
         });

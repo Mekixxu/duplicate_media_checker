@@ -78,3 +78,57 @@ python movie_manager/main.py --paths "D:\Movies" --tmdb-key "你的_TMDB_API_KEY
 
 *   **性能**: 程序会尝试读取每个视频文件的头部信息以获取时长。对于网络共享文件，这可能需要一些时间，取决于网络速度。
 *   **安全**: `--serve` 模式启动的 Web 服务器仅监听本地请求，但请勿在公共网络环境下暴露该端口。
+
+## EXE/ZIP 打包说明（build.py）
+
+已审阅项目根目录的 [build.py](file:///c:/Users/Player_X/Documents/Tare/duplicate_media_checker/build.py)，当前**已经实现可用打包功能**，无需额外补写打包脚本。
+
+### 打包脚本已实现的功能
+
+1. 自动读取版本号  
+   从 [web_server.py](file:///c:/Users/Player_X/Documents/Tare/duplicate_media_checker/movie_manager/web_server.py) 的 `__version__` 读取版本。
+2. 生成 `version_info.txt`  
+   用于写入 Windows 可执行文件版本信息。
+3. 调用 PyInstaller 生成单文件 EXE  
+   实际调用方式是 `sys.executable -m PyInstaller`，避免 PATH 问题。
+4. 自动生成 ZIP 发布包  
+   将 `dist` 下的 exe、`ff_res` 目录文件和 `README_DEPLOY.md`（重命名为 `README.md`）打进 zip。
+
+### 打包前准备
+
+在项目根目录执行：
+
+```powershell
+pip install pyinstaller
+```
+
+确保以下内容存在：
+
+- `movie_manager/templates`（打包参数会包含该目录）
+- `ff_res`（建议包含 `ffmpeg.exe`、`ffprobe.exe`，用于发布后可直接运行）
+
+### 一键打包命令
+
+```powershell
+python build.py
+```
+
+### 产物位置与命名
+
+执行成功后会在 `dist` 目录生成：
+
+- `DuplicateChecker_v<version>.exe`
+- `DuplicateChecker_v<version>.zip`
+
+其中 `<version>` 来自 `movie_manager/web_server.py` 的 `__version__`。
+
+### 发布使用方式
+
+1. 将 zip 发给目标机器  
+2. 解压到任意目录  
+3. 双击 `DuplicateChecker_v<version>.exe` 启动
+
+### 常见问题
+
+- 若提示找不到 PyInstaller：先执行 `pip install pyinstaller`，并确认当前 Python 环境与运行 `python build.py` 的环境一致。
+- 若启动后媒体分析不可用：检查发布目录中是否包含 `ffmpeg.exe` 和 `ffprobe.exe`（通常来自 `ff_res`）。
