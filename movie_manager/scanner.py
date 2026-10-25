@@ -80,7 +80,13 @@ def scan_directories(paths, extensions=None, ignore_hidden=True, ignore_system=T
                             'size': size,
                             'ctime': file_stat.st_ctime,
                             'mtime': file_stat.st_mtime,
-                            'extension': file_path.suffix.lower()
+                            'extension': file_path.suffix.lower(),
+                            # st_ino/st_dev form the file identity used to
+                            # detect hardlinks / the same file via two paths.
+                            # Some filesystems (and some network shares)
+                            # report 0 - the matcher then just skips them.
+                            'inode': file_stat.st_ino,
+                            'volume': file_stat.st_dev
                         })
                     except Exception as e:
                         logging.error(f"Error accessing file {file_path}: {e}")

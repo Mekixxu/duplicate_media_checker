@@ -1,9 +1,7 @@
 import re
 import os
 import subprocess
-import hashlib
 import logging
-import tempfile
 import shutil
 import zlib
 from rapidfuzz import fuzz
@@ -82,18 +80,12 @@ def extract_id(filename):
         return f"{match.group(1).upper()}-{match.group(2)}"
     return None
 
-def get_file_hash(filepath, limit_bytes=1024*1024):
-    """
-    Calculates hash of the first N bytes of a file.
-    """
+def _hamming_hex(a, b):
+    """Hamming distance between two hex hashes; 64 (max) on parse failure."""
     try:
-        hasher = hashlib.md5()
-        with open(filepath, 'rb') as f:
-            buf = f.read(limit_bytes)
-            hasher.update(buf)
-        return hasher.hexdigest()
-    except Exception:
-        return None
+        return bin(int(a, 16) ^ int(b, 16)).count('1')
+    except (ValueError, TypeError):
+        return 64
 
 def extract_first_frame_hash(filepath):
     """
@@ -126,6 +118,31 @@ def extract_first_frame_hash(filepath):
         logging.error(f"File hash check failed for {filepath}: {e}")
     return None
 
+def _prepare_name_variants(files, aliases_map):
+    """
+    Attaches '_name_variants' to each file: the normalized filename plus all
+    normalized aliases (from TMDB etc.). Two files are name-compatible when
+    ANY pair of their variants matches, which is what makes cross-language
+    matching ("英国病人" vs "The English Patient") work.
+    """
+    for f in files:
+        variants = [f['norm_name']]
+        aliases = aliases_map.get(f['filename']) if aliases_map else None
+        if aliases:
+            for alias in aliases:
+                norm = normalize_filename(alias)
+                if norm and norm not in variants:
+                    variants.append(norm)
+        f['_name_variants'] = variants
+
+def _names_similar(file_a, file_b):
+    """True if any name variant pair exceeds the similarity threshold."""
+    for a in file_a['_name_variants']:
+        for b in file_b['_name_variants']:
+            if fuzz.token_set_ratio(a, b) > 85:
+                return True
+    return False
+
 def find_duplicates(files, aliases_map=None):
     """
     Groups files based on size/extension, duration, and name similarity.
@@ -133,12 +150,43 @@ def find_duplicates(files, aliases_map=None):
     """
     groups = []
     processed_indices = set()
-    
+
     # Pre-calculate normalized names and IDs
     for f in files:
         f['norm_name'] = normalize_filename(f['filename'])
         f['id_code'] = extract_id(f['filename'])
         f['match_reason'] = [] # Init empty list
+    _prepare_name_variants(files, aliases_map)
+
+    # --- Strategy 0: Same Physical File (hardlink / same file twice) (O(N)) ---
+    # Same volume + file index means one file with two paths (hardlink).
+    # Deleting one path never frees space, so surface these separately.
+    inode_map = {}
+    for i, f in enumerate(files):
+        inode = f.get('inode')
+        volume = f.get('volume')
+        if inode and volume is not None:
+            inode_map.setdefault((volume, inode), []).append(i)
+
+    for (volume, inode), indices in inode_map.items():
+        if len(indices) > 1:
+            current_group = []
+            for idx in indices:
+                if idx in processed_indices: continue
+                processed_indices.add(idx)
+                f = files[idx]
+                f['match_reason'].append('same_file')
+                current_group.append(f)
+
+            if len(current_group) > 1:
+                groups.append({
+                    'id': f"group_inode_{volume}_{inode}",
+                    'files': current_group,
+                    'primary_name': current_group[0]['filename'],
+                    'status': 'confirmed',
+                    'reasons': ['same_file'],
+                    'total_size': sum(f.get('size', 0) for f in current_group)
+                })
 
     # --- Strategy 1: Exact Size Grouping (O(N)) ---
     # Most reliable indicator for exact duplicates
@@ -149,39 +197,52 @@ def find_duplicates(files, aliases_map=None):
             if size not in size_map:
                 size_map[size] = []
             size_map[size].append(i)
-            
+
     for size, indices in size_map.items():
         if len(indices) > 1:
-            # Check extension within size group
-            # We can have multiple groups for same size if extensions differ (though rare for exact dupes)
-            # Or we can just group them all if they share size
-            
             # Sub-group by extension
             ext_map = {}
             for idx in indices:
                 ext = files[idx].get('extension', '')
                 if ext not in ext_map: ext_map[ext] = []
                 ext_map[ext].append(idx)
-                
+
             for ext, ext_indices in ext_map.items():
                 if len(ext_indices) > 1:
-                    current_group = []
-                    for idx in ext_indices:
-                        if idx in processed_indices: continue
-                        processed_indices.add(idx)
-                        f = files[idx]
-                        if not f['match_reason']: f['match_reason'].append('size_exact')
-                        current_group.append(f)
-                    
-                    if len(current_group) > 1:
-                        groups.append({
-                            'id': f"group_size_{size}_{ext}",
-                            'files': current_group,
-                            'primary_name': current_group[0]['filename'],
-                            'status': 'suspected',
-                            'reasons': ['size_exact'],
-                            'total_size': sum(f.get('size', 0) for f in current_group)
-                        })
+                    # Same size+ext is not proof: unrelated files can share a
+                    # byte size. When both durations are known they must also
+                    # agree (unknown duration = 0 stays a wildcard).
+                    duration_runs = []
+                    for idx in sorted(ext_indices, key=lambda i: files[i].get('duration', 0)):
+                        d = files[idx].get('duration', 0)
+                        if d > 0 and duration_runs:
+                            last_d = max(files[j].get('duration', 0) for j in duration_runs[-1])
+                            if last_d > 0 and d - last_d > 2:
+                                duration_runs.append([])
+                        elif not duration_runs:
+                            duration_runs.append([])
+                        duration_runs[-1].append(idx)
+
+                    for run in duration_runs:
+                        if len(run) < 2:
+                            continue
+                        current_group = []
+                        for idx in run:
+                            if idx in processed_indices: continue
+                            processed_indices.add(idx)
+                            f = files[idx]
+                            if not f['match_reason']: f['match_reason'].append('size_exact')
+                            current_group.append(f)
+
+                        if len(current_group) > 1:
+                            groups.append({
+                                'id': f"group_size_{size}_{ext}",
+                                'files': current_group,
+                                'primary_name': current_group[0]['filename'],
+                                'status': 'suspected',
+                                'reasons': ['size_exact'],
+                                'total_size': sum(f.get('size', 0) for f in current_group)
+                            })
 
     # --- Strategy 2: Duration Window (O(N log N)) ---
     # Sort by duration
@@ -230,13 +291,16 @@ def find_duplicates(files, aliases_map=None):
                 break
                 
             # Check Name Similarity within this duration window
-            # Fuzzy match
+            # Fuzzy match (filename first, then aliases incl. cross-language)
             ratio = fuzz.token_set_ratio(current_file['norm_name'], candidate['norm_name'])
-            
+
             is_match = False
             if ratio > 85:
                 is_match = True
                 candidate['match_reason'].append('name_fuzzy')
+            elif _names_similar(current_file, candidate):
+                is_match = True
+                candidate['match_reason'].append('alias_match')
             elif current_file['id_code'] and candidate['id_code'] and current_file['id_code'] == candidate['id_code']:
                  is_match = True
                  candidate['match_reason'].append('id_match')
@@ -309,11 +373,14 @@ def find_duplicates(files, aliases_map=None):
                         
                 # Check Name Similarity
                 ratio = fuzz.token_set_ratio(current_file['norm_name'], candidate['norm_name'])
-                
+
                 is_match = False
                 if ratio > 85:
                     is_match = True
                     candidate['match_reason'].append('name_fuzzy_size_window')
+                elif _names_similar(current_file, candidate):
+                    is_match = True
+                    candidate['match_reason'].append('alias_match_size_window')
                 elif current_file['id_code'] and candidate['id_code'] and current_file['id_code'] == candidate['id_code']:
                     is_match = True
                     candidate['match_reason'].append('id_match_size_window')
@@ -343,6 +410,93 @@ def find_duplicates(files, aliases_map=None):
                     'total_size': sum(f.get('size', 0) for f in group_files)
                 })
                 
+            i += 1
+
+    # --- Strategy 3.5: Image dHash Matching (O(N) exact + bounded window near-dup) ---
+    # Only files that still have an image_hash (photos etc.) and were not
+    # matched above. Exact same hash catches copies/re-encodes; a small
+    # Hamming radius within a size-ratio window catches resized crops.
+    remaining_indices = [i for i in range(len(files)) if i not in processed_indices
+                         and files[i].get('image_hash')]
+    if remaining_indices:
+        # a) Exact hash buckets
+        hash_map = {}
+        for idx in remaining_indices:
+            hash_map.setdefault(files[idx]['image_hash'], []).append(idx)
+
+        for h, indices in hash_map.items():
+            if len(indices) > 1:
+                group_files = []
+                for idx in indices:
+                    processed_indices.add(idx)
+                    f = files[idx]
+                    f['match_reason'].append('image_hash')
+                    group_files.append(f)
+                groups.append({
+                    'id': f"group_ihash_{h}",
+                    'files': group_files,
+                    'primary_name': group_files[0]['filename'],
+                    'status': 'suspected',
+                    'reasons': ['image_hash'],
+                    'total_size': sum(f.get('size', 0) for f in group_files)
+                })
+
+        # b) Near-dup window: sorted by size, compare while size ratio <= 2x
+        remaining_indices = [i for i in range(len(files)) if i not in processed_indices
+                             and files[i].get('image_hash')]
+        sorted_by_size = sorted(remaining_indices, key=lambda i: files[i].get('size', 0))
+        i = 0
+        while i < len(sorted_by_size):
+            current_idx = sorted_by_size[i]
+            if current_idx in processed_indices:
+                i += 1
+                continue
+
+            current_file = files[current_idx]
+            s1 = current_file.get('size', 0) or 1
+            current_group_indices = [current_idx]
+            comparisons = 0
+
+            j = i + 1
+            while j < len(sorted_by_size):
+                candidate_idx = sorted_by_size[j]
+                if candidate_idx in processed_indices:
+                    j += 1
+                    continue
+
+                candidate = files[candidate_idx]
+                s2 = candidate.get('size', 0)
+                if s1 == 0 or s2 / s1 > 2:
+                    break
+                if s1 / s2 > 2:
+                    j += 1
+                    continue
+
+                comparisons += 1
+                if comparisons > 500:  # safety valve for huge same-size sets
+                    break
+
+                if _hamming_hex(current_file['image_hash'], candidate['image_hash']) <= 10:
+                    current_group_indices.append(candidate_idx)
+
+                j += 1
+
+            if len(current_group_indices) > 1:
+                group_files = []
+                for idx in current_group_indices:
+                    processed_indices.add(idx)
+                    f = files[idx]
+                    f['match_reason'].append('image_hash_near')
+                    group_files.append(f)
+                groups.append({
+                    'id': f"group_ihash_near_{current_file['image_hash']}",
+                    'files': group_files,
+                    'primary_name': group_files[0]['filename'],
+                    'status': 'suspected',
+                    'reasons': ['image_hash_near'],
+                    'total_size': sum(f.get('size', 0) for f in group_files)
+                })
+
             i += 1
 
     # --- Strategy 4: File Type Grouping + Pure Name Fuzzy Match (O(K * N^2)) ---
@@ -382,12 +536,15 @@ def find_duplicates(files, aliases_map=None):
                         continue
                         
                     candidate = files[idx2]
-                    
+
                     # Pure name match, no size or duration checks
                     ratio = fuzz.token_set_ratio(current_file['norm_name'], candidate['norm_name'])
                     if ratio > 85:
                         current_group_indices.append(idx2)
                         candidate['match_reason'].append('name_fuzzy_type_only')
+                    elif _names_similar(current_file, candidate):
+                        current_group_indices.append(idx2)
+                        candidate['match_reason'].append('alias_match_type_only')
                         
                 if len(current_group_indices) > 1:
                     group_files = []

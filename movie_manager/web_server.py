@@ -5,14 +5,16 @@ import logging
 import time
 import json
 import sys
-from flask import Flask, request, jsonify, render_template, send_from_directory
+from urllib.parse import urlparse
+from flask import Flask, request, jsonify, render_template, send_from_directory, send_file
 from scan_manager import ScanManager
+from app_paths import get_app_dir
 
 # App Version
-__version__ = "0.0.6"
+__version__ = "0.0.8"
 
-# Configure logging to file
-log_file = os.path.join(os.getcwd(), 'duplicate_checker.log')
+# Configure logging to file (writable dir, see app_paths)
+log_file = os.path.join(get_app_dir(), 'duplicate_checker.log')
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -36,6 +38,31 @@ else:
 
 app = Flask(__name__, template_folder=template_dir)
 manager = ScanManager()
+
+# Local-only guard: the server binds 127.0.0.1, but a webpage in the
+# browser (CSRF) or DNS rebinding can still send requests to localhost.
+# Reject foreign Host headers and cross-site Origins outright.
+_ALLOWED_HOSTNAMES = {'127.0.0.1', 'localhost', '::1'}
+
+@app.before_request
+def guard_local_only():
+    host = (request.host.split(':')[0] or '').lower()
+    if host not in _ALLOWED_HOSTNAMES:
+        return jsonify({'success': False, 'message': 'Forbidden host'}), 403
+
+    origin = request.headers.get('Origin')
+    if origin:
+        parsed = urlparse(origin)
+        origin_host = (parsed.hostname or '').lower()
+        server_port = request.environ.get('SERVER_PORT', '')
+        if origin_host not in _ALLOWED_HOSTNAMES:
+            return jsonify({'success': False, 'message': 'Forbidden origin'}), 403
+        if parsed.port and server_port and str(parsed.port) != server_port:
+            return jsonify({'success': False, 'message': 'Forbidden origin'}), 403
+
+@app.route('/assets/<path:filename>')
+def serve_asset(filename):
+    return send_from_directory(os.path.join(template_dir, 'assets'), filename)
 
 @app.route('/')
 def index():
@@ -98,21 +125,6 @@ def get_status():
     # Ensure status_data is clean
     return jsonify(clean_data(status_data))
 
-class SafeJSONEncoder(json.JSONEncoder):
-    def default(self, obj):
-        if isinstance(obj, float):
-            if math.isnan(obj) or math.isinf(obj):
-                return None
-        return super().default(obj)
-    
-    def encode(self, o):
-        # Override encode to handle top-level floats or floats inside structures recursively?
-        # Standard json.dumps with allow_nan=False raises ValueError.
-        # We want to replace them.
-        # The easiest way is to use default json.dumps but monkeypatch or use a recursive cleaner function.
-        # However, Flask's jsonify uses its own provider.
-        return super().encode(o)
-
 def clean_data(data):
     if isinstance(data, dict):
         return {k: clean_data(v) for k, v in data.items()}
@@ -173,28 +185,99 @@ def batch_exclude():
     uuids = data.get('uuids', [])
     if not uuids:
         return jsonify({'success': False, 'message': 'No UUIDs provided'}), 400
-        
+
     success, msg = manager.exclude_files_batch(uuids)
     return jsonify({'success': success, 'message': msg})
 
-@app.route('/api/open')
+@app.route('/api/cleanup/confirmed', methods=['POST'])
+def cleanup_confirmed():
+    data = request.json or {}
+    policy = data.get('policy', 'keep_largest')
+
+    success, msg = manager.cleanup_confirmed(policy)
+    return jsonify({'success': success, 'message': msg})
+
+@app.route('/api/thumb/<path:uuid>')
+def get_thumb(uuid):
+    """
+    Thumbnail for a scanned file: Pillow for images, ffmpeg for videos.
+    Results are cached in <app dir>/thumbs. Video thumbnails require a full
+    ffmpeg build (the stripped OBS build cannot encode JPEG).
+    """
+    file_obj = manager.get_file(uuid)
+    if not file_obj or not os.path.exists(file_obj['path']):
+        return jsonify({'success': False, 'message': 'File not found'}), 404
+
+    thumbs_dir = os.path.join(get_app_dir(), 'thumbs')
+    os.makedirs(thumbs_dir, exist_ok=True)
+    thumb_path = os.path.join(thumbs_dir, uuid + '.jpg')
+
+    if not os.path.exists(thumb_path):
+        if not _generate_thumb(file_obj, thumb_path):
+            return jsonify({'success': False, 'message': 'Thumbnail unavailable'}), 404
+
+    return send_file(thumb_path, mimetype='image/jpeg')
+
+def _generate_thumb(file_obj, out_path):
+    from metadata import IMAGE_EXTENSIONS
+    path = file_obj['path']
+
+    if file_obj.get('extension') in IMAGE_EXTENSIONS:
+        try:
+            from PIL import Image
+            with Image.open(path) as img:
+                img = img.convert('RGB')
+                img.thumbnail((320, 320))
+                img.save(out_path, 'JPEG', quality=80)
+            return True
+        except Exception as e:
+            logging.debug(f"Image thumb failed for {path}: {e}")
+            return False
+
+    # Video: grab one frame near the start
+    try:
+        from matcher import get_ffmpeg_path
+        ffmpeg = get_ffmpeg_path()
+        if not ffmpeg:
+            return False
+        dur = file_obj.get('duration') or 0
+        seek = min(3, dur / 2) if dur else 0
+        startupinfo = None
+        if os.name == 'nt':
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        result = subprocess.run(
+            [ffmpeg, '-v', 'error', '-ss', f'{seek:.2f}', '-i', path,
+             '-frames:v', '1', '-vf', 'scale=320:-2', '-q:v', '4',
+             '-f', 'image2', '-y', out_path],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            startupinfo=startupinfo
+        )
+        return result.returncode == 0 and os.path.exists(out_path) and os.path.getsize(out_path) > 0
+    except Exception as e:
+        logging.debug(f"Video thumb failed for {path}: {e}")
+        return False
+
+# POST-only so a plain <img>/<form> on some webpage can't trigger these
+# while the server is running (combined with the Origin guard above).
+@app.route('/api/open', methods=['POST'])
 def open_file():
-    path = request.args.get('path')
+    path = (request.json or {}).get('path')
     if not path or not os.path.exists(path):
         return jsonify({'success': False, 'message': 'File not found'}), 404
-        
+
     try:
         os.startfile(path) # Windows only
         return jsonify({'success': True})
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 500
 
-@app.route('/api/reveal')
+@app.route('/api/reveal', methods=['POST'])
 def reveal_file():
-    path = request.args.get('path')
+    path = (request.json or {}).get('path')
     if not path or not os.path.exists(path):
         return jsonify({'success': False, 'message': 'File not found'}), 404
-        
+
     try:
         # Use shell command to handle arguments and explorer quirks better
         # Normalizing path is crucial for Windows

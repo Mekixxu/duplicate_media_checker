@@ -4,13 +4,22 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>电影文件管理中心</title>
-    <!-- Vue 3 -->
-    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
-    <!-- Element Plus CSS & JS -->
-    <link rel="stylesheet" href="https://unpkg.com/element-plus/dist/index.css" />
-    <script src="https://unpkg.com/element-plus"></script>
-    <!-- Icons -->
-    <script src="https://unpkg.com/@element-plus/icons-vue"></script>
+    <!-- Assets: bundled locally in Web-serve mode (fully offline);
+         static report mode (file://) falls back to CDN. -->
+    <script>
+        (function () {
+            var local = location.protocol !== 'file:';
+            var base = local ? '/assets' : 'https://unpkg.com';
+            var vue = local ? '/assets/vue.global.prod.js' : base + '/vue@3/dist/vue.global.prod.js';
+            var epJs = local ? '/assets/element-plus.full.min.js' : base + '/element-plus@2/dist/index.full.min.js';
+            var epCss = local ? '/assets/element-plus.css' : base + '/element-plus@2/dist/index.css';
+            var icons = local ? '/assets/element-plus-icons.iife.min.js' : base + '/@element-plus/icons-vue@2/dist/index.iife.min.js';
+            document.write('<link rel="stylesheet" href="' + epCss + '">');
+            document.write('<script src="' + vue + '"><\/script>');
+            document.write('<script src="' + epJs + '"><\/script>');
+            document.write('<script src="' + icons + '"><\/script>');
+        })();
+    </script>
     
     <style>
         /* Custom CSS for modern look */
@@ -172,6 +181,8 @@
         .excluded-row { opacity: 0.5; background-color: #fafafa !important; }
         .excluded-row .el-table__cell { color: #a8abb2; text-decoration: line-through; }
 
+        .thumb-fallback { width: 80px; height: 45px; display: flex; align-items: center; justify-content: center; font-size: 11px; color: #909399; background: #f5f7fa; border-radius: 4px; }
+
         /* 增大复选框点击区域 */
         .el-checkbox {
             padding: 6px 10px;
@@ -254,7 +265,7 @@
             </el-button>
         </div>
 
-        <div class="section-card progress-container" v-if="status && (isBusy || status.progress > 0)">
+        <div class="section-card progress-container" v-if="status && (isBusy || (status.progress > 0 && status.progress < 100) || status.status === 'error')">
             <div class="section-title" v-text="'扫描进度: ' + (status.message || '...')"></div>
             <el-progress :percentage="status.progress || 0" :status="progressStatus" :text-inside="true" :stroke-width="20"></el-progress>
             <div class="log-window" ref="logWindow">
@@ -340,8 +351,8 @@
             </div>
 
             <!-- 文件表格 -->
-            <el-table :data="pagedFiles" style="width: 100%" border stripe size="small" @selection-change="handleFileSelection">
-                <el-table-column type="selection" width="55"></el-table-column>
+            <el-table :data="pagedFiles" style="width: 100%" border stripe size="small" row-key="uuid" @selection-change="handleFileSelection">
+                <el-table-column type="selection" width="55" :reserve-selection="true"></el-table-column>
                 <el-table-column prop="filename" label="文件名" sortable min-width="250">
                     <template #default="scope">
                         <span class="file-link" @click="openFile(scope.row.path)">
@@ -404,7 +415,7 @@
                             <div style="margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center;">
                                  <div>
                                     <span style="font-weight: bold;">匹配原因:</span>
-                                    <el-tag v-for="r in (props.row.reasons || [])" :key="r" size="small" style="margin-left: 5px;" v-text="r"></el-tag>
+                                    <el-tag v-for="r in (props.row.reasons || [])" :key="r" size="small" :type="reasonTagType(r)" style="margin-left: 5px;" v-text="reasonLabel(r)"></el-tag>
                                  </div>
                                  <div>
                                     <el-button type="primary" size="small" @click="startDeepVerify(props.row.id)" v-if="props.row.status !== 'confirmed'"><el-icon><Cpu /></el-icon> 验证Hash</el-button>
@@ -419,6 +430,13 @@
                             
                             <el-table :ref="(el) => setNestedTableRef(props.row.id, el)" :data="props.row.files" border size="small" row-key="uuid" @selection-change="(val) => handleSelectionChange(props.row.id, val)" :row-class-name="tableRowClassName">
                                 <el-table-column type="selection" width="55" :reserve-selection="true"></el-table-column>
+                                <el-table-column label="预览" width="90">
+                                     <template #default="scope">
+                                        <el-image v-if="isServeMode" :src="'/api/thumb/' + scope.row.uuid" style="width:80px;height:45px" fit="cover" lazy>
+                                            <template #error><div class="thumb-fallback">无预览</div></template>
+                                        </el-image>
+                                    </template>
+                                </el-table-column>
                                 <el-table-column prop="filename" label="文件名" min-width="250">
                                      <template #default="scope">
                                         <span class="file-link" @click="openFile(scope.row.path)" v-text="scope.row.filename"></span>
@@ -427,7 +445,7 @@
                                 </el-table-column>
                                 <el-table-column label="匹配详情" width="150">
                                      <template #default="scope">
-                                        <el-tag v-for="r in (scope.row.match_reason || [])" :key="r" size="small" style="margin-right:2px" v-text="r"></el-tag>
+                                        <el-tag v-for="r in (scope.row.match_reason || [])" :key="r" size="small" :type="reasonTagType(r)" style="margin-right:2px" v-text="reasonLabel(r)"></el-tag>
                                     </template>
                                 </el-table-column>
                                 <el-table-column prop="size_mb" label="大小(MB)" width="100"></el-table-column>
@@ -445,7 +463,7 @@
                         </div>
                     </template>
                 </el-table-column>
-                
+
                 <el-table-column label="组名 (主要文件名)" prop="primary_name" min-width="300"></el-table-column>
                 <el-table-column label="包含文件数" width="100">
                     <template #default="scope"><span v-text="scope.row.files.length"></span></template>
@@ -456,7 +474,7 @@
                     </template>
                 </el-table-column>
                 <el-table-column label="状态" width="120">
-                     <template #default="scope">
+                    <template #default="scope">
                          <el-tag v-if="scope.row.status === 'confirmed'" type="success">确定重复</el-tag>
                          <el-tag v-else-if="scope.row.status === 'content_mismatch'" type="danger">内容不同</el-tag>
                          <el-tag v-else type="warning">疑似重复</el-tag>
@@ -479,6 +497,14 @@
                             <el-icon><ArrowUp /></el-icon> 折叠全部
                         </el-button>
                     </el-button-group>
+                    <el-select v-model="keepPolicy" size="small" style="width: 130px;">
+                        <el-option label="保留最大文件" value="keep_largest"></el-option>
+                        <el-option label="保留最新文件" value="keep_newest"></el-option>
+                        <el-option label="保留最早文件" value="keep_oldest"></el-option>
+                    </el-select>
+                    <el-button type="danger" size="small" :disabled="confirmedGroups.length === 0" @click="cleanupConfirmed">
+                        <el-icon><Magic-Stick /></el-icon> 按策略一键清理 (<span v-text="confirmedGroups.length"></span> 组)
+                    </el-button>
                     <el-button type="danger" size="small" :disabled="globalSelectedUuids.length === 0" @click="globalBatchDelete">
                         <el-icon><Delete /></el-icon> 删除全部选中文件 (<span v-text="globalSelectedUuids.length"></span>)
                     </el-button>
@@ -493,7 +519,7 @@
                             <div style="margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center;">
                                  <div>
                                     <span style="font-weight: bold;">匹配原因:</span>
-                                    <el-tag v-for="r in (props.row.reasons || [])" :key="r" size="small" style="margin-left: 5px;" v-text="r"></el-tag>
+                                    <el-tag v-for="r in (props.row.reasons || [])" :key="r" size="small" :type="reasonTagType(r)" style="margin-left: 5px;" v-text="reasonLabel(r)"></el-tag>
                                  </div>
                                  <div>
                                     <el-button type="info" size="small" :disabled="selectedInGroup(props.row.id).length === 0" @click="batchExclude(props.row.id)">
@@ -507,6 +533,13 @@
                             
                             <el-table :ref="(el) => setNestedTableRef(props.row.id, el)" :data="props.row.files" border size="small" row-key="uuid" @selection-change="(val) => handleSelectionChange(props.row.id, val)" :row-class-name="tableRowClassName">
                                 <el-table-column type="selection" width="55" :reserve-selection="true"></el-table-column>
+                                <el-table-column label="预览" width="90">
+                                     <template #default="scope">
+                                        <el-image v-if="isServeMode" :src="'/api/thumb/' + scope.row.uuid" style="width:80px;height:45px" fit="cover" lazy>
+                                            <template #error><div class="thumb-fallback">无预览</div></template>
+                                        </el-image>
+                                    </template>
+                                </el-table-column>
                                 <el-table-column prop="filename" label="文件名" min-width="250">
                                      <template #default="scope">
                                         <span class="file-link" @click="openFile(scope.row.path)" v-text="scope.row.filename"></span>
@@ -515,7 +548,7 @@
                                 </el-table-column>
                                 <el-table-column label="匹配详情" width="150">
                                      <template #default="scope">
-                                        <el-tag v-for="r in (scope.row.match_reason || [])" :key="r" size="small" style="margin-right:2px" v-text="r"></el-tag>
+                                        <el-tag v-for="r in (scope.row.match_reason || [])" :key="r" size="small" :type="reasonTagType(r)" style="margin-right:2px" v-text="reasonLabel(r)"></el-tag>
                                     </template>
                                 </el-table-column>
                                 <el-table-column prop="size_mb" label="大小(MB)" width="100"></el-table-column>
@@ -574,7 +607,7 @@
                 
                 const config = ref({
                     paths: 'D:\\Movies',
-                    extensions: '.mkv, .mp4, .avi, .mov, .wmv, .flv, .webm, .rmvb',
+                    extensions: '.mkv, .mp4, .avi, .mov, .wmv, .flv, .webm, .rmvb, .ts, .mts, .m2ts, .mht, .mhtml',
                     apiKey: '',
                     ignoreHidden: true,
                     ignoreSystem: true
@@ -593,8 +626,28 @@
 
                 const currentPage = ref(1);
                 const pageSize = ref(50);
+                const keepPolicy = ref('keep_largest');
                 const logWindow = ref(null);
                 let pollTimer = null;
+                const isServeMode = location.protocol !== 'file:';
+
+                // Friendly labels/colors for match reasons shown on file rows
+                const REASON_LABELS = {
+                    same_file: '同一文件',
+                    size_exact: '大小相同',
+                    name_fuzzy: '名称相似',
+                    alias_match: '别名匹配',
+                    id_match: '番号相同',
+                    image_hash: '图片相同',
+                    image_hash_near: '图片相似',
+                    content_match: '内容一致'
+                };
+                const reasonLabel = (r) => REASON_LABELS[r] || r;
+                const reasonTagType = (r) => {
+                    if (r === 'same_file') return 'success';
+                    if (r === 'alias_match' || r === 'image_hash' || r === 'image_hash_near') return 'warning';
+                    return 'info';
+                };
 
                 // --- Config Persistence ---
                 const loadConfig = () => {
@@ -822,9 +875,11 @@
                         const data = await res.json();
                         if (data.success) {
                             isBusy.value = true;
-                            files.value = []; 
+                            files.value = [];
                             groups.value = [];
+                            filteredFiles.value = [];
                             groupSelections.value = {};
+                            currentPage.value = 1;
                             startPolling();
                         } else {
                             ElementPlus.ElMessage.error(data.message);
@@ -1074,10 +1129,10 @@
                             status.value = data;
                             await nextTick();
                             if (logWindow.value) logWindow.value.scrollTop = logWindow.value.scrollHeight;
-                            if (['completed', 'scanned', 'error', 'cancelled'].includes(data.status)) {
+                            if (['idle', 'completed', 'scanned', 'error', 'cancelled'].includes(data.status)) {
                                 isBusy.value = false;
                                 clearInterval(pollTimer);
-                                fetchData();
+                                if (data.status !== 'idle') fetchData();
                             }
                         }
                     } catch (parseErr) {
@@ -1090,8 +1145,22 @@
                     }, 1000);
                 };
 
-                const openFile = async (path) => fetch(`/api/open?path=${encodeURIComponent(path)}`);
-                const revealFile = async (path) => fetch(`/api/reveal?path=${encodeURIComponent(path)}`);
+                const openFile = async (path) => {
+                    if (location.protocol === 'file:') {
+                        ElementPlus.ElMessage.warning('静态报告模式不支持打开文件，请使用 Web 服务模式');
+                        return;
+                    }
+                    const res = await fetch('/api/open', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ path: path }) });
+                    if (!res.ok) ElementPlus.ElMessage.error('打开文件失败');
+                };
+                const revealFile = async (path) => {
+                    if (location.protocol === 'file:') {
+                        ElementPlus.ElMessage.warning('静态报告模式不支持定位文件，请使用 Web 服务模式');
+                        return;
+                    }
+                    const res = await fetch('/api/reveal', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ path: path }) });
+                    if (!res.ok) ElementPlus.ElMessage.error('定位文件失败');
+                };
                 const formatDuration = (s) => {
                     if (!s) return '';
                     const h = Math.floor(s / 3600);
@@ -1139,6 +1208,23 @@
                     } catch (e) { if(e!=='cancel') console.error(e); }
                 };
 
+                const cleanupConfirmed = async () => {
+                    const policyLabels = { keep_largest: '保留最大文件', keep_newest: '保留最新文件', keep_oldest: '保留最早文件' };
+                    const label = policyLabels[keepPolicy.value] || keepPolicy.value;
+                    try {
+                        await ElementPlus.ElMessageBox.confirm(
+                            `将按"${label}"策略清理全部 ${confirmedGroups.value.length} 个确认重复组（其余文件移入回收站），是否继续？`,
+                            '危险操作', { confirmButtonText: '清理', cancelButtonText: '取消', type: 'warning' });
+                        const res = await fetch('/api/cleanup/confirmed', {
+                            method: 'POST', headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({ policy: keepPolicy.value })
+                        });
+                        const data = await res.json();
+                        if (data.success) { ElementPlus.ElMessage.success(data.message); fetchData(); }
+                        else { ElementPlus.ElMessage.error(data.message); }
+                    } catch (e) { if (e !== 'cancel') console.error(e); }
+                };
+
                 const confirmedGroups = computed( () => {
                     return groups.value.filter(g => g.status === 'confirmed');
                 });
@@ -1161,7 +1247,7 @@
 
                 return {
                     files, groups, isBusy, config, status, filters,
-                    filteredFiles, pagedFiles, currentPage, pageSize, logWindow, progressStatus,
+                    filteredFiles, pagedFiles, currentPage, pageSize, keepPolicy, logWindow, progressStatus,
                     startScan, stopScan, startTMDB, startMatching,
                     openFile, revealFile, formatDuration, deleteFile, deleteOthers,
                     handleSelectionChange, selectedInGroup, batchDelete, batchExclude, handleFileSelection,
@@ -1170,7 +1256,8 @@
                     globalSelectedUuids, globalBatchDelete, expandedSuspectedGroupIds, expandedConfirmedGroupIds,
                     handleSuspectedExpandChange, handleConfirmedExpandChange, setNestedTableRef, suspectedGroupsTableRef,
                     expandAllSuspectedGroups, expandAllConfirmedGroups, collapseAllSuspectedGroups, collapseAllConfirmedGroups,
-                    expandedSuspectedCount, expandedConfirmedCount
+                    expandedSuspectedCount, expandedConfirmedCount,
+                    cleanupConfirmed, isServeMode, reasonLabel, reasonTagType
                 };
             }
         });

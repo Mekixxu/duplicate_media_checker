@@ -13,20 +13,22 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 def main():
     parser = argparse.ArgumentParser(description="Movie Manager & Duplicate Finder")
     parser.add_argument("--paths", nargs='+', required=True, help="List of paths to scan (local or SMB)")
+    parser.add_argument("--extensions", help="Comma-separated list of extensions to scan (default: built-in video set)")
     parser.add_argument("--output", default="movie_report.html", help="Output HTML report file")
     parser.add_argument("--serve", action='store_true', help="Start a local web server to view the report with full interactivity")
     parser.add_argument("--tmdb-key", help="Optional TMDB API Key for online alias search")
-    
+
     args = parser.parse_args()
-    
+
     paths = args.paths
     output_file = args.output
     tmdb_key = args.tmdb_key
-    
+    extensions = [e.strip() for e in args.extensions.split(',')] if args.extensions else None
+
     logging.info(f"Starting scan on: {paths}")
-    
+
     # 1. Scan files
-    files = scan_directories(paths)
+    files = scan_directories(paths, extensions=extensions)
     if not files:
         logging.warning("No video files found!")
         return

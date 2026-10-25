@@ -2,6 +2,9 @@ import logging
 import requests
 import urllib.parse
 
+# matcher is importable as a top-level module in both entry paths
+from matcher import normalize_filename, extract_id
+
 class TMDBSearcher:
     def __init__(self, api_key):
         self.api_key = api_key
@@ -18,13 +21,8 @@ class TMDBSearcher:
         if filename in self.cache:
             return self.cache[filename]
 
-        # Clean filename for search (remove extension, dots, year)
-        # We rely on the simple normalization from matcher, but we might need a cleaner one here.
-        # For search, we just want the main title part.
-        query = filename.replace('.', ' ').replace('_', ' ')
-        
-        # Simple heuristic: take first few words? Or just search as is?
-        # Let's try to search as is first.
+        # Strip extension and quality/release keywords so TMDB gets a clean title
+        query = normalize_filename(filename)
         
         try:
             encoded_query = urllib.parse.quote(query)
@@ -78,18 +76,14 @@ def get_aliases_for_files(files, api_key, progress_callback=None):
     logging.info("Starting online search for aliases...")
     
     for idx, f in enumerate(files):
-        # Only search if it looks like a movie name (not just an ID)
-        if f.get('id_code'): 
+        # Only search if it looks like a movie name (not just an ID).
+        # id_code may not be precomputed when this runs before matching,
+        # so derive it from the filename directly.
+        if f.get('id_code') or extract_id(f['filename']):
             continue
-            
-        # Use the normalized name or original filename?
-        # Original filename usually has years and quality info, which confuses search.
-        # Normalized name (from matcher) is cleaner.
-        # But we don't have normalized name here yet? We do if we run this after scanning.
-        
-        # Let's use a simple clean here
-        clean_name = f['filename'].rsplit('.', 1)[0]
-        
+
+        clean_name = normalize_filename(f['filename'])
+
         # Optimization: Don't search every single file if names are identical.
         # But here we iterate all files.
         
