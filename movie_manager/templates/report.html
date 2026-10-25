@@ -684,7 +684,9 @@
                             <span v-text="compareResult.result.elapsed_s"></span>
                         </el-descriptions-item>
                     </el-descriptions>
-                    <el-alert v-if="isProportionalAlign" type="info" :closable="false" show-icon style="margin-top: 12px;"
+                    <el-alert v-if="alignMode === 'content'" type="info" :closable="false" show-icon style="margin-top: 12px;"
+                              :title="'采样已按内容对齐（音频锚点 ' + ((compareResult.result.alignment.anchors || []).length) + ' 个，时长差 ' + (compareResult.result.alignment.duration_diff_pct || '') + '%），可对比不同剪辑版本'"></el-alert>
+                    <el-alert v-else-if="alignMode === 'proportional'" type="info" :closable="false" show-icon style="margin-top: 12px;"
                               :title="'采样已按比例对齐（时长差 ' + (compareResult.result.alignment.duration_diff_pct || '') + '%），按同内容不同速度版本处理（如 PAL 提速）'"></el-alert>
                     <el-alert v-else-if="compareResult.align_warning" type="warning" title="两文件时长差超过 0.5%，采样点可能未对齐到同一画面，分数仅供参考" :closable="false" show-icon style="margin-top: 12px;"></el-alert>
                     <div style="margin-top: 12px;" v-if="compareResult.result.verdict && compareResult.result.verdict.reasons && compareResult.result.verdict.reasons.length">
@@ -1416,9 +1418,9 @@
                     if (!p || !cr) return '';
                     return p === cr.a.uuid ? cr.b.uuid : cr.a.uuid;
                 });
-                const isProportionalAlign = computed(() => {
+                const alignMode = computed(() => {
                     const a = compareResult.value && compareResult.value.result && compareResult.value.result.alignment;
-                    return !!(a && a.mode === 'proportional');
+                    return (a && a.mode) || '';
                 });
                 const metricValue = computed(() => {
                     const c = compareResult.value && compareResult.value.result && compareResult.value.result.comparison;
@@ -1463,7 +1465,7 @@
                     expandedSuspectedCount, expandedConfirmedCount,
                     cleanupConfirmed, isServeMode, reasonLabel, reasonTagType,
                     versionGroups, clusterThreshold, startVersionClustering, startCompare,
-                    compareResult, compareDialogVisible, preferredName, preferredUuid, otherUuid, confidenceText, metricValue, isProportionalAlign
+                    compareResult, compareDialogVisible, preferredName, preferredUuid, otherUuid, confidenceText, metricValue, alignMode
                 };
             }
         });
