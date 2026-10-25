@@ -2,9 +2,12 @@ import threading
 import time
 import logging
 import uuid
+import subprocess
+import sys
+import shutil
 from scanner import scan_directories
 from metadata import enrich_metadata
-from matcher import find_duplicates, verify_group_deep
+from matcher import find_duplicates, find_version_clusters, verify_group_deep
 from online import get_aliases_for_files
 from report import generate_report
 from send2trash import send2trash
@@ -66,6 +69,7 @@ class ScanManager:
 
             self.groups = surviving_groups
             self.files = [f for f in self.files if f['uuid'] not in deleted_uuids]
+            self._prune_version_groups(deleted_uuids)
 
             freed_mb = freed / 1024 / 1024
             self._log(f"Cleanup: {cleaned_groups} groups cleaned, {len(deleted_uuids)} files trashed, {freed_mb:.1f} MB freed.")
@@ -99,6 +103,7 @@ class ScanManager:
             # Remove from groups
             for group in self.groups:
                 group['files'] = [f for f in group['files'] if f['uuid'] != target_uuid]
+            self._prune_version_groups({target_uuid})
             
             # Clean up empty groups
             self.groups = [g for g in self.groups if len(g['files']) > 1]
@@ -133,6 +138,7 @@ class ScanManager:
             # Update groups
             for group in self.groups:
                 group['files'] = [f for f in group['files'] if f['uuid'] not in target_set]
+            self._prune_version_groups(target_set)
             
             # Clean up empty/single groups
             self.groups = [g for g in self.groups if len(g['files']) > 1]
@@ -154,6 +160,7 @@ class ScanManager:
                 return False, "Group not found"
             
             deleted_count = 0
+            removed_uuids = set()
             for file_obj in group['files']:
                 if file_obj['uuid'] == keep_uuid:
                     continue
@@ -166,8 +173,11 @@ class ScanManager:
                 
                 # Remove from main list
                 self.files = [f for f in self.files if f['uuid'] != file_obj['uuid']]
+                removed_uuids.add(file_obj['uuid'])
                 deleted_count += 1
             
+            self._prune_version_groups(removed_uuids)
+
             # After deleting others, this group is no longer a duplicate group
             # So we remove the group entirely from the groups list
             self.groups = [g for g in self.groups if g['id'] != group_id]
@@ -188,6 +198,8 @@ class ScanManager:
         self.files = []      # List of file dicts (with 'uuid')
         self.aliases_map = {} # {filename: set(aliases)}
         self.groups = []     # List of duplicate groups
+        self.version_groups = [] # Same movie, different versions (quality compare candidates)
+        self.compare_result = None
 
         # Runtime files live in a writable dir (exe dir / cwd / %LOCALAPPDATA%)
         self.output_file = os.path.join(get_app_dir(), "movie_report.html")
@@ -204,15 +216,16 @@ class ScanManager:
         session = load_session()
         if not session:
             return
-        files, groups, aliases = session
+        files, groups, version_groups, aliases = session
         if files:
             self.files = files
             self.groups = groups or []
+            self.version_groups = version_groups or []
             self.aliases_map = aliases or {}
             logging.info(f"Restored session: {len(self.files)} files, {len(self.groups)} groups.")
 
     def _save_session(self):
-        save_session(self.files, self.groups, self.aliases_map)
+        save_session(self.files, self.groups, self.aliases_map, self.version_groups)
 
     def _load_exclusions(self):
         """Loads exclusions from JSON file."""
@@ -277,6 +290,7 @@ class ScanManager:
         return {
             "files": self.files,
             "groups": self.groups,
+            "version_groups": self.version_groups,
             "aliases_count": len(self.aliases_map)
         }
 
@@ -321,6 +335,30 @@ class ScanManager:
         self._start_thread(self._run_deep_search, target_group_ids)
         return True, "Deep search started"
 
+    # --- Step 5: Version Clustering (same movie, different versions) ---
+    def start_version_clustering(self, threshold=85):
+        if self.is_busy():
+            return False, "Task already in progress"
+        if not self.files:
+            return False, "No files to cluster. Please scan first."
+
+        self._start_thread(self._run_version_clustering, float(threshold))
+        return True, "Version clustering started"
+
+    # --- Step 6: Quality Compare (via videodiff) ---
+    def start_compare(self, uuid_a, uuid_b):
+        if self.is_busy():
+            return False, "Task already in progress"
+        fa = self.get_file(uuid_a)
+        fb = self.get_file(uuid_b)
+        if not fa or not fb:
+            return False, "File not found"
+        if fa['uuid'] == fb['uuid']:
+            return False, "Select two different files"
+
+        self._start_thread(self._run_compare, fa, fb)
+        return True, "Comparison started"
+
     # --- Control ---
     def stop_scan(self):
         if self.status != "idle":
@@ -331,7 +369,7 @@ class ScanManager:
         return False
 
     def is_busy(self):
-        return self.status in ["scanning", "enriching", "searching", "matching"]
+        return self.status in ["scanning", "enriching", "searching", "matching", "comparing"]
 
     # --- Internal Helpers ---
     def _reset_state(self, full=False):
@@ -342,6 +380,7 @@ class ScanManager:
             self.files = []
             self.aliases_map = {}
             self.groups = []
+            self.version_groups = []
 
     def _start_thread(self, target, *args):
         self._thread = threading.Thread(target=target, args=args)
@@ -593,6 +632,142 @@ class ScanManager:
             self.status = "error"
             self.message = str(e)
             self._log(f"Deep search error: {e}")
+
+    def _prune_version_groups(self, removed_uuids):
+        """Drops deleted files from version groups (called by delete flows)."""
+        if not self.version_groups or not removed_uuids:
+            return
+        for g in self.version_groups:
+            g['files'] = [f for f in g['files'] if f['uuid'] not in removed_uuids]
+        self.version_groups = [g for g in self.version_groups if len(g['files']) > 1]
+
+    def _run_version_clustering(self, threshold):
+        try:
+            self.status = "matching"
+            self.message = "Clustering movie versions..."
+            self.progress = 30
+            self._log(f"Version clustering (threshold={threshold:.0f})...")
+
+            version_groups = find_version_clusters(self.files, self.aliases_map, threshold)
+
+            self.version_groups = version_groups
+            self._log(f"Found {len(version_groups)} version clusters.")
+
+            # Persist + write report BEFORE flipping to the terminal status,
+            # so anything waiting on status sees fully saved state.
+            self._save_session()
+            generate_report(self.files, self.groups, self.output_file)
+
+            self.status = "scanned"
+            self.progress = 100
+            self.message = "Version clustering complete."
+        except Exception as e:
+            self.status = "error"
+            self.message = f"Error: {str(e)}"
+            self._log(f"Version clustering error: {e}")
+            logging.exception("Version clustering error")
+
+    @staticmethod
+    def _videodiff_cmd():
+        """Resolves the videodiff launcher: VIDEODIFF env > PATH > module."""
+        env_path = os.environ.get('VIDEODIFF')
+        if env_path:
+            return [env_path]
+        which = shutil.which('videodiff')
+        if which:
+            return [which]
+        return [sys.executable, '-m', 'videodiff']
+
+    def _run_compare(self, fa, fb):
+        try:
+            self.status = "comparing"
+            self.message = "Comparing video quality (videodiff)..."
+            self.progress = 50
+            self._log(f"Comparing: {fa['filename']} vs {fb['filename']}")
+
+            da, db = fa.get('duration') or 0, fb.get('duration') or 0
+            align_warning = bool(da and db and abs(da - db) / max(da, db) > 0.005)
+
+            self.compare_result = None
+            cmd = self._videodiff_cmd()
+
+            # Preflight: doctor --json (exit 10 = environment not usable)
+            try:
+                pre = subprocess.run(cmd + ['doctor', '--json'], capture_output=True,
+                                     text=True, encoding='utf-8', errors='replace', timeout=120)
+                if pre.returncode != 0:
+                    detail = ''
+                    try:
+                        import json as _json
+                        detail = _json.loads(pre.stdout).get('error', {}).get('message', '')
+                    except Exception:
+                        detail = (pre.stderr or pre.stdout or '').strip()[:300]
+                    self.compare_result = {
+                        'error': 'videodiff 环境不可用: ' + (detail or 'ffmpeg 或指标 filter 缺失（需要带 ssim/psnr/libvmaf 的完整版 ffmpeg）')
+                    }
+                    self.status = "scanned"
+                    self.progress = 100
+                    self.message = "Compare failed (environment)."
+                    return
+            except FileNotFoundError:
+                self.compare_result = {
+                    'error': '未找到 videodiff。请安装 video_diff 项目（pip install <video_diff 路径>）或设置 VIDEODIFF 环境变量。'
+                }
+                self.status = "scanned"
+                self.progress = 100
+                self.message = "Compare failed (videodiff missing)."
+                return
+
+            self._log("videodiff doctor OK, running compare...")
+            proc = subprocess.run(
+                cmd + ['compare', fa['path'], fb['path'], '--json'],
+                capture_output=True, text=True, encoding='utf-8', errors='replace',
+                timeout=3600)
+
+            result = None
+            try:
+                import json as _json
+                result = _json.loads(proc.stdout) if proc.stdout.strip() else None
+            except Exception:
+                result = None
+
+            if proc.returncode == 0 and result and not result.get('error'):
+                self.compare_result = {
+                    'a': {'uuid': fa['uuid'], 'name': fa['filename']},
+                    'b': {'uuid': fb['uuid'], 'name': fb['filename']},
+                    'result': result,
+                    'align_warning': align_warning,
+                    'error': None,
+                }
+                self._log("Compare complete.")
+            else:
+                msg = ''
+                if result and result.get('error'):
+                    msg = result['error'].get('message', '')
+                if not msg:
+                    tail = (proc.stderr or proc.stdout or '').strip().splitlines()
+                    msg = tail[-1] if tail else 'exit code %d' % proc.returncode
+                self.compare_result = {
+                    'a': {'uuid': fa['uuid'], 'name': fa['filename']},
+                    'b': {'uuid': fb['uuid'], 'name': fb['filename']},
+                    'align_warning': align_warning,
+                    'error': 'videodiff: ' + msg,
+                }
+                self._log('Compare failed: ' + msg)
+
+            self.status = "scanned"
+            self.progress = 100
+            self.message = "Compare complete." if not self.compare_result.get('error') else "Compare failed."
+        except subprocess.TimeoutExpired:
+            self.compare_result = {'error': '对比超时（超过 60 分钟）'}
+            self.status = "scanned"
+            self.progress = 100
+            self.message = "Compare timed out."
+        except Exception as e:
+            self.compare_result = {'error': str(e)}
+            self.status = "error"
+            self.message = 'Error: ' + str(e)
+            self._log('Compare error: ' + str(e))
 
 # Global instance
 manager = ScanManager()

@@ -6,6 +6,8 @@ import shutil
 import zlib
 from rapidfuzz import fuzz
 
+from scanner import VIDEO_EXTENSIONS
+
 # Cache for ffmpeg path
 _FFMPEG_PATH = None
 
@@ -86,6 +88,129 @@ def _hamming_hex(a, b):
         return bin(int(a, 16) ^ int(b, 16)).count('1')
     except (ValueError, TypeError):
         return 64
+
+def _extract_year(filename):
+    """Standalone 19xx/20xx token (quality tags like 1080p never match)."""
+    m = re.search(r'(?<!\d)(19\d{2}|20\d{2})(?!\d)', filename)
+    return int(m.group(1)) if m else None
+
+def _best_name_ratio(file_a, file_b):
+    """Best fuzzy ratio across all name variants (filename + aliases)."""
+    best = 0
+    for a in file_a['_name_variants']:
+        for b in file_b['_name_variants']:
+            r = fuzz.token_set_ratio(a, b)
+            if r > best:
+                best = r
+                if best == 100:
+                    return best
+    return best
+
+def find_version_clusters(files, aliases_map=None, threshold=85):
+    """
+    Clusters video files that look like different VERSIONS of the same movie:
+    size and duration are ignored entirely and all video containers share one
+    bucket (mkv vs mp4 matches). Guard rails against obvious false positives:
+    - files whose extracted release YEARS differ are never merged (kills most
+      sequel pairs like "The Raid 2011" vs "The Raid 2 2014");
+    - matching id codes cluster unconditionally.
+    Returns groups with status 'version', separate from duplicate groups.
+    """
+    idxs = [i for i, f in enumerate(files) if f.get('extension') in VIDEO_EXTENSIONS]
+    for i in idxs:
+        f = files[i]
+        if 'norm_name' not in f:
+            f['norm_name'] = normalize_filename(f['filename'])
+        if 'id_code' not in f:
+            f['id_code'] = extract_id(f['filename'])
+        if '_year' not in f:
+            f['_year'] = _extract_year(f['filename'])
+    _prepare_name_variants([files[i] for i in idxs], aliases_map)
+
+    n = len(idxs)
+    parent = list(range(n))
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a, b):
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[rb] = ra
+
+    # Candidate pairs must share at least one significant token; tokens in
+    # huge buckets ("the", "1080p"-stripped leftovers) are skipped so the
+    # pairwise pass stays bounded on large libraries.
+    token_map = {}
+    for k, i in enumerate(idxs):
+        f = files[i]
+        tokens = set()
+        for v in f['_name_variants']:
+            tokens.update(t for t in v.split() if len(t) >= 3)
+        for t in tokens:
+            token_map.setdefault(t, []).append(k)
+
+    # Same id code (e.g. RBC-1007 in any naming style) is a strong signal:
+    # index by id directly, since "abc 123" and "abc123" share no token.
+    id_map = {}
+    for k, i in enumerate(idxs):
+        code = files[i]['id_code']
+        if code:
+            id_map.setdefault(code, []).append(k)
+    for bucket in id_map.values():
+        if len(bucket) < 2:
+            continue
+        for x in range(len(bucket)):
+            for y in range(x + 1, len(bucket)):
+                union(bucket[x], bucket[y])
+
+    max_bucket = max(200, n // 5)
+    checked = set()
+    for bucket in token_map.values():
+        if len(bucket) < 2 or len(bucket) > max_bucket:
+            continue
+        for x in range(len(bucket)):
+            for y in range(x + 1, len(bucket)):
+                ka, kb = bucket[x], bucket[y]
+                pair = (ka, kb) if ka < kb else (kb, ka)
+                if pair in checked:
+                    continue
+                checked.add(pair)
+                fa, fb = files[idxs[ka]], files[idxs[kb]]
+                ya, yb = fa.get('_year'), fb.get('_year')
+                if ya and yb and ya != yb:
+                    continue
+                if _best_name_ratio(fa, fb) >= threshold:
+                    union(ka, kb)
+
+    comp = {}
+    for k in range(n):
+        comp.setdefault(find(k), []).append(k)
+
+    groups = []
+    gid = 0
+    for members in comp.values():
+        if len(members) < 2:
+            continue
+        gfiles = sorted((files[idxs[k]] for k in members),
+                        key=lambda f: f.get('size', 0), reverse=True)
+        groups.append({
+            'id': f'version_{gid}',
+            'files': gfiles,
+            'primary_name': gfiles[0]['filename'],
+            'status': 'version',
+            'kind': 'version',
+            'reasons': ['version_cluster'],
+            'total_size': sum(f.get('size', 0) for f in gfiles),
+            'threshold': threshold
+        })
+        gid += 1
+
+    groups.sort(key=lambda g: g['total_size'], reverse=True)
+    return groups
 
 def extract_first_frame_hash(filepath):
     """

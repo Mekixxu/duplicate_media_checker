@@ -6,7 +6,7 @@ from app_paths import get_app_dir
 SESSION_FILE = 'session.json'
 SESSION_VERSION = 1
 
-def save_session(files, groups, aliases_map):
+def save_session(files, groups, aliases_map, version_groups=None):
     """
     Persists the current scan results so the app can restore them on the
     next start (stable uuids keep selections/exclusions meaningful) and
@@ -18,6 +18,7 @@ def save_session(files, groups, aliases_map):
             'version': SESSION_VERSION,
             'files': files,
             'groups': groups,
+            'version_groups': version_groups or [],
             'aliases': {k: sorted(v) for k, v in aliases_map.items()} if aliases_map else {},
         }
         tmp = path + '.tmp'
@@ -31,9 +32,9 @@ def save_session(files, groups, aliases_map):
 
 def load_session():
     """
-    Returns (files, groups, aliases_map) or None when no valid session exists.
-    Alias values come back as lists; consumers iterate them, so sets are
-    not required.
+    Returns (files, groups, version_groups, aliases_map) or None when no
+    valid session exists. Alias values come back as lists; consumers
+    iterate them, so sets are not required.
     """
     path = os.path.join(get_app_dir(), SESSION_FILE)
     if not os.path.exists(path):
@@ -43,7 +44,8 @@ def load_session():
             data = json.load(f)
         if data.get('version') != SESSION_VERSION:
             return None
-        return data['files'], data['groups'], data.get('aliases', {})
+        return (data['files'], data['groups'], data.get('version_groups', []),
+                data.get('aliases', {}))
     except Exception as e:
         logging.error(f"Failed to load session: {e}")
         return None

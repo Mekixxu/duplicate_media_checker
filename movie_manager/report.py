@@ -2,7 +2,7 @@ import json
 import os
 from jinja2 import Environment, FileSystemLoader
 
-def generate_report(files, groups, output_file):
+def generate_report(files, groups, output_file, version_groups=None):
     """
     Generates the HTML report using Jinja2 template.
     """
@@ -17,10 +17,12 @@ def generate_report(files, groups, output_file):
     # Use ensure_ascii=False for readability and correct encoding handling
     files_json = json.dumps(files, default=str, ensure_ascii=False)
     groups_json = json.dumps(groups, default=str, ensure_ascii=False)
-    
+    version_groups_json = json.dumps(version_groups or [], default=str, ensure_ascii=False)
+
     html_content = template.render(
         files_json=files_json,
-        groups_json=groups_json
+        groups_json=groups_json,
+        version_groups_json=version_groups_json
     )
     
     with open(output_file, 'w', encoding='utf-8') as f:

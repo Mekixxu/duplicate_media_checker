@@ -11,7 +11,7 @@ from scan_manager import ScanManager
 from app_paths import get_app_dir
 
 # App Version
-__version__ = "0.0.8"
+__version__ = "0.0.9"
 
 # Configure logging to file (writable dir, see app_paths)
 log_file = os.path.join(get_app_dir(), 'duplicate_checker.log')
@@ -106,9 +106,36 @@ def start_match():
 def start_deep_match():
     data = request.json
     group_ids = data.get('group_ids', None) # If None, process all
-    
+
     success, msg = manager.start_deep_search(group_ids)
     return jsonify({'success': success, 'message': msg})
+
+@app.route('/api/version/cluster', methods=['POST'])
+def version_cluster():
+    data = request.json or {}
+    try:
+        threshold = float(data.get('threshold', 85))
+    except (TypeError, ValueError):
+        threshold = 85.0
+    threshold = min(max(threshold, 50), 100)
+
+    success, msg = manager.start_version_clustering(threshold)
+    return jsonify({'success': success, 'message': msg})
+
+@app.route('/api/compare/start', methods=['POST'])
+def start_compare():
+    data = request.json or {}
+    uuids = data.get('uuids') or [data.get('uuid_a'), data.get('uuid_b')]
+    uuids = [u for u in uuids if u]
+    if len(uuids) != 2:
+        return jsonify({'success': False, 'message': 'Select exactly two files'}), 400
+
+    success, msg = manager.start_compare(uuids[0], uuids[1])
+    return jsonify({'success': success, 'message': msg})
+
+@app.route('/api/compare/result')
+def compare_result():
+    return jsonify(manager.compare_result or {'error': 'No comparison has been run yet.'})
 
 @app.route('/api/scan/stop', methods=['POST'])
 def stop_scan():

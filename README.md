@@ -16,6 +16,7 @@
 4.  **Web 服务模式**：内置轻量级 Web 服务器，支持在浏览器中直接点击打开文件或定位文件，界面资源已本地化、可完全离线使用，文件行支持缩略图预览。
 5.  **会话持久化与增量扫描**：扫描结果自动保存，重启后恢复；对未变化的文件（路径+大小+修改时间一致）跳过 ffprobe，二次扫描大幅提速。
 6.  **一键清理**：按策略（保留最大/最新/最早）自动清理全部“确定重复”组，其余文件移入回收站。
+7.  **版本聚类与画质对比**：按文件名（可选 TMDB 别名）把同一部影片的不同版本聚成“版本组”——忽略体积/时长/容器差异（mkv 与 mp4 可互配），并用年份护栏避免续集误报。版本组内勾选两个文件即可调用 [videodiff](../video_diff) 做客观画质对比（SSIM/PSNR/VMAF），给出保留建议；时长差 >0.5% 时会提示采样对齐可能不准。
 
 ## 安装依赖
 
@@ -83,6 +84,7 @@ python movie_manager/main.py --paths "D:\Movies" --tmdb-key "你的_TMDB_API_KEY
 *   **性能**: 程序会尝试读取每个视频文件的头部信息以获取时长。对于网络共享文件，这可能需要一些时间，取决于网络速度。重复扫描同一目录时会自动增量跳过未变化的文件。
 *   **安全**: `--serve` 模式启动的 Web 服务器仅监听本地请求，并拒绝非本机 Host 与跨站 Origin 的请求；仍请勿在公共网络环境下暴露该端口。
 *   **视频缩略图**: 依赖 ffmpeg 编码 JPEG 帧。`ff_res` 中自带的裁剪版 ffmpeg（OBS 定制构建）不支持该操作，若需要缩略图请替换为 [gyan.dev full 版](https://www.gyan.dev/ffmpeg/builds/) 或系统 PATH 中的标准 ffmpeg。图片缩略图由 Pillow 生成，无此限制。
+*   **画质对比 (videodiff)**: 需要 `videodiff` 可被调用（`pip install <video_diff 项目路径>` 后自动发现，或设置 `VIDEODIFF` 环境变量），且 ffmpeg 带 ssim/psnr/libvmaf 滤镜（实测 OBS 裁剪版带 ssim/psnr，可直接对比；VMAF 需完整版）。
 
 ## EXE/ZIP 打包说明（build.py）
 

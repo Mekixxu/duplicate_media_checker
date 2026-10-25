@@ -207,6 +207,7 @@
         <!-- Hidden data for offline report mode -->
         <script id="embedded-data-files" type="application/json">[[[ files_json | default('null') ]]]</script>
         <script id="embedded-data-groups" type="application/json">[[[ groups_json | default('null') ]]]</script>
+        <script id="embedded-data-versions" type="application/json">[[[ version_groups_json | default('null') ]]]</script>
         
         <!-- 1. 扫描配置 -->
         <div class="section-card">
@@ -288,6 +289,14 @@
                     
                     <el-button type="success" @click="startMatching" :disabled="isBusy || filteredFiles.length === 0">
                         <el-icon><Connection /></el-icon> 查找重复
+                    </el-button>
+
+                    <el-divider direction="vertical"></el-divider>
+
+                    <span style="font-size: 13px; color: #606266;">版本聚类阈值</span>
+                    <el-input-number v-model="clusterThreshold" :min="50" :max="100" size="small" style="width: 100px;"></el-input-number>
+                    <el-button type="primary" plain @click="startVersionClustering" :disabled="isBusy || filteredFiles.length === 0">
+                        <el-icon><CopyDocument /></el-icon> 版本聚类
                     </el-button>
                 </div>
             </div>
@@ -584,6 +593,113 @@
             </el-table>
         </div>
         
+        <!-- 6. 同片多版本（版本聚类） -->
+        <div class="section-card" v-show="versionGroups.length > 0">
+            <div class="section-title">
+                <span><el-icon><CopyDocument /></el-icon> 同片多版本 (<span v-text="versionGroups.length"></span> 组)</span>
+            </div>
+            <el-table :data="versionGroups" style="width: 100%" border stripe size="small" row-key="id" :default-sort="{prop: 'total_size', order: 'descending'}">
+                <el-table-column type="expand">
+                    <template #default="props">
+                        <div style="padding: 16px; background: #ecf5ff; border-radius: 8px; margin: 8px;">
+                            <div style="margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center;">
+                                <span style="font-weight: bold; color: #606266;">同一部影片的不同版本（体积/时长/容器均可不同），勾选两个后可做画质对比</span>
+                                <div>
+                                    <el-button type="primary" size="small" :disabled="selectedInGroup(props.row.id).length !== 2 || !isServeMode" @click="startCompare(props.row.id)">
+                                        <el-icon><Cpu /></el-icon> 画质对比选中
+                                    </el-button>
+                                    <el-button type="danger" size="small" :disabled="selectedInGroup(props.row.id).length === 0" @click="batchDelete(props.row.id)">
+                                        <el-icon><Delete /></el-icon> 删除选中 (<span v-text="selectedInGroup(props.row.id).length"></span>)
+                                    </el-button>
+                                </div>
+                            </div>
+                            <el-table :ref="(el) => setNestedTableRef(props.row.id, el)" :data="props.row.files" border size="small" row-key="uuid" @selection-change="(val) => handleSelectionChange(props.row.id, val)" :row-class-name="tableRowClassName">
+                                <el-table-column type="selection" width="55" :reserve-selection="true"></el-table-column>
+                                <el-table-column label="预览" width="90">
+                                     <template #default="scope">
+                                        <el-image v-if="isServeMode" :src="'/api/thumb/' + scope.row.uuid" style="width:80px;height:45px" fit="cover" lazy>
+                                            <template #error><div class="thumb-fallback">无预览</div></template>
+                                        </el-image>
+                                    </template>
+                                </el-table-column>
+                                <el-table-column prop="filename" label="文件名" min-width="250">
+                                     <template #default="scope">
+                                        <span class="file-link" @click="openFile(scope.row.path)" v-text="scope.row.filename"></span>
+                                    </template>
+                                </el-table-column>
+                                <el-table-column prop="size_mb" label="大小(MB)" width="100"></el-table-column>
+                                 <el-table-column prop="duration" label="时长" width="100">
+                                    <template #default="scope"><span v-text="formatDuration(scope.row.duration)"></span></template>
+                                </el-table-column>
+                                <el-table-column prop="path" label="路径"></el-table-column>
+                                <el-table-column width="110" label="操作">
+                                     <template #default="scope">
+                                        <el-button type="danger" size="small" @click="deleteFile(scope.row.uuid)"><el-icon><Delete /></el-icon> 删除</el-button>
+                                    </template>
+                                </el-table-column>
+                            </el-table>
+                        </div>
+                    </template>
+                </el-table-column>
+
+                <el-table-column label="组名 (主要文件名)" prop="primary_name" min-width="300"></el-table-column>
+                <el-table-column label="版本数" width="90">
+                    <template #default="scope"><span v-text="scope.row.files.length"></span></template>
+                </el-table-column>
+                <el-table-column label="总体积 (MB)" prop="total_size" sortable width="140">
+                     <template #default="scope">
+                        <span v-text="(scope.row.total_size / 1024 / 1024).toFixed(2)"></span>
+                    </template>
+                </el-table-column>
+                <el-table-column label="类型" width="100">
+                    <template #default="scope"><el-tag type="primary">版本组</el-tag></template>
+                </el-table-column>
+            </el-table>
+        </div>
+
+        <!-- 画质对比结果对话框 -->
+        <el-dialog v-model="compareDialogVisible" title="画质对比结果" width="760px" top="8vh">
+            <div v-if="compareResult">
+                <el-alert v-if="compareResult.error" type="error" :title="compareResult.error" :closable="false" show-icon></el-alert>
+                <template v-else>
+                    <el-descriptions :column="1" border size="small">
+                        <el-descriptions-item label="对比文件">
+                            <span v-text="compareResult.a.name + '  vs  ' + compareResult.b.name"></span>
+                        </el-descriptions-item>
+                        <el-descriptions-item label="建议保留">
+                            <el-tag v-if="preferredName" type="success" v-text="preferredName"></el-tag>
+                            <span v-else style="color: #909399;">无明确倾向</span>
+                        </el-descriptions-item>
+                        <el-descriptions-item label="结论">
+                            <span v-text="compareResult.result.verdict ? compareResult.result.verdict.type : ''"></span>
+                            <span style="margin-left: 10px; color: #909399;" v-text="'置信度: ' + confidenceText"></span>
+                        </el-descriptions-item>
+                        <el-descriptions-item v-if="metricValue !== ''" label="感知指标">
+                            <span v-text="compareResult.result.comparison.metric + ' = ' + metricValue"></span>
+                        </el-descriptions-item>
+                        <el-descriptions-item v-if="compareResult.result.audio_comparison && compareResult.result.audio_comparison.summary" label="音频">
+                            <span v-text="compareResult.result.audio_comparison.summary"></span>
+                        </el-descriptions-item>
+                        <el-descriptions-item label="耗时(秒)">
+                            <span v-text="compareResult.result.elapsed_s"></span>
+                        </el-descriptions-item>
+                    </el-descriptions>
+                    <el-alert v-if="compareResult.align_warning" type="warning" title="两文件时长差超过 0.5%，采样点可能未对齐到同一画面，分数仅供参考" :closable="false" show-icon style="margin-top: 12px;"></el-alert>
+                    <div style="margin-top: 12px;" v-if="compareResult.result.verdict && compareResult.result.verdict.reasons && compareResult.result.verdict.reasons.length">
+                        <div style="font-weight: 600; margin-bottom: 6px;">判定理由:</div>
+                        <ul style="margin: 0; padding-left: 20px;">
+                            <li v-for="(r, i) in compareResult.result.verdict.reasons" :key="i" v-text="r"></li>
+                        </ul>
+                    </div>
+                    <div style="margin-top: 16px; text-align: right;" v-if="preferredUuid && otherUuid">
+                        <el-button type="danger" @click="deleteFile(otherUuid); compareDialogVisible = false;">
+                            保留 <span v-text="preferredName"></span>，删除另一个（移入回收站）
+                        </el-button>
+                    </div>
+                </template>
+            </div>
+        </el-dialog>
+
     </div>
 
     <script>
@@ -595,6 +711,10 @@
                 const filteredFiles = ref([]); // Separate state for filtered result
                 const fileSelection = ref([]); // Main table selection
                 const groups = ref([]);
+                const versionGroups = ref([]);
+                const compareResult = ref(null);
+                const compareDialogVisible = ref(false);
+                let comparePending = false;
                 const isBusy = ref(false);
                 const groupSelections = ref({});
                 const selectedSuspectedGroupIds = ref([]);
@@ -627,6 +747,7 @@
                 const currentPage = ref(1);
                 const pageSize = ref(50);
                 const keepPolicy = ref('keep_largest');
+                const clusterThreshold = ref(85);
                 const logWindow = ref(null);
                 let pollTimer = null;
                 const isServeMode = location.protocol !== 'file:';
@@ -797,11 +918,14 @@
                         if (embeddedFiles.trim() !== 'null') {
                             const filesData = JSON.parse(embeddedFiles);
                             const groupsData = JSON.parse(embeddedGroups);
-                            
+                            const embeddedVersions = document.getElementById('embedded-data-versions').textContent;
+                            const versionsData = embeddedVersions.trim() === 'null' ? [] : JSON.parse(embeddedVersions);
+
                             if (filesData) {
                                 const expandedIds = new Set([...expandedSuspectedGroupIds.value, ...expandedConfirmedGroupIds.value]);
                                 files.value = filesData;
                                 groups.value = groupsData || [];
+                                versionGroups.value = versionsData || [];
                                 syncExpandedGroups(expandedIds);
                                 if (filteredFiles.value.length === 0 && files.value.length > 0) {
                                     filteredFiles.value = files.value;
@@ -835,6 +959,7 @@
                             const expandedIds = new Set([...expandedSuspectedGroupIds.value, ...expandedConfirmedGroupIds.value]);
                             files.value = data.files;
                             groups.value = data.groups;
+                            versionGroups.value = data.version_groups || [];
                             syncExpandedGroups(expandedIds);
                             
                             // If filteredFiles is empty (first load), init it
@@ -877,6 +1002,7 @@
                             isBusy.value = true;
                             files.value = [];
                             groups.value = [];
+                            versionGroups.value = [];
                             filteredFiles.value = [];
                             groupSelections.value = {};
                             currentPage.value = 1;
@@ -930,6 +1056,41 @@
                         if (data.success) { isBusy.value = true; startPolling(); }
                         else { ElementPlus.ElMessage.error(data.message); }
                     } catch (e) { ElementPlus.ElMessage.error(e); }
+                };
+
+                const startVersionClustering = async () => {
+                    try {
+                        const res = await fetch('/api/version/cluster', {
+                            method: 'POST', headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({ threshold: clusterThreshold.value })
+                        });
+                        const data = await res.json();
+                        if (data.success) { isBusy.value = true; startPolling(); }
+                        else { ElementPlus.ElMessage.error(data.message); }
+                    } catch (e) { ElementPlus.ElMessage.error('无法启动: ' + e); }
+                };
+
+                const startCompare = async (groupId) => {
+                    const selection = selectedInGroup(groupId);
+                    if (selection.length !== 2) return ElementPlus.ElMessage.warning('请恰好勾选两个文件');
+                    comparePending = true;
+                    try {
+                        const res = await fetch('/api/compare/start', {
+                            method: 'POST', headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({ uuids: selection.map(f => f.uuid) })
+                        });
+                        const data = await res.json();
+                        if (data.success) { isBusy.value = true; startPolling(); }
+                        else { comparePending = false; ElementPlus.ElMessage.error(data.message); }
+                    } catch (e) { comparePending = false; ElementPlus.ElMessage.error(e); }
+                };
+
+                const fetchCompareResult = async () => {
+                    try {
+                        const res = await fetch('/api/compare/result');
+                        compareResult.value = await res.json();
+                        compareDialogVisible.value = true;
+                    } catch (e) { console.error('Compare result fetch error', e); }
                 };
 
                 const startDeepVerify = async (groupId) => {
@@ -1050,7 +1211,7 @@
                     delete nestedTableRefs.value[groupId];
                 };
                 const restoreSelectionState = () => {
-                    groups.value.forEach(group => {
+                    groups.value.concat(versionGroups.value).forEach(group => {
                         const tableRef = nestedTableRefs.value[group.id];
                         if (!tableRef || typeof tableRef.clearSelection !== 'function') return;
                         const selectedUuids = new Set(groupSelections.value[group.id] || []);
@@ -1075,7 +1236,8 @@
                     groupSelections.value[groupId] = normalizeIds(selection.map(item => item.uuid));
                 };
                 const selectedInGroup = (groupId) => {
-                    const group = groups.value.find(item => item.id === groupId);
+                    const group = groups.value.find(item => item.id === groupId)
+                        || versionGroups.value.find(item => item.id === groupId);
                     if (!group) return [];
                     const selectedUuids = new Set(groupSelections.value[groupId] || []);
                     return group.files.filter(file => selectedUuids.has(file.uuid));
@@ -1133,6 +1295,7 @@
                                 isBusy.value = false;
                                 clearInterval(pollTimer);
                                 if (data.status !== 'idle') fetchData();
+                                if (comparePending) { comparePending = false; fetchCompareResult(); }
                             }
                         }
                     } catch (parseErr) {
@@ -1228,6 +1391,41 @@
                 const confirmedGroups = computed( () => {
                     return groups.value.filter(g => g.status === 'confirmed');
                 });
+
+                const CONFIDENCE_ZH = { high: '高', medium: '中', low: '低' };
+                const confidenceText = computed(() => {
+                    const v = compareResult.value && compareResult.value.result && compareResult.value.result.verdict;
+                    return v ? (CONFIDENCE_ZH[v.confidence] || v.confidence || '') : '';
+                });
+                // videodiff verdict.preferred is a file path; map it back to A/B
+                const preferredUuid = computed(() => {
+                    const cr = compareResult.value;
+                    if (!cr || cr.error) return '';
+                    const v = (cr.result || {}).verdict || {};
+                    if (!v.preferred) return '';
+                    const rf = (cr.result || {}).files || [];
+                    if (rf.length >= 1 && rf[0].path === v.preferred) return cr.a.uuid;
+                    if (rf.length >= 2 && rf[1].path === v.preferred) return cr.b.uuid;
+                    return '';
+                });
+                const otherUuid = computed(() => {
+                    const p = preferredUuid.value;
+                    const cr = compareResult.value;
+                    if (!p || !cr) return '';
+                    return p === cr.a.uuid ? cr.b.uuid : cr.a.uuid;
+                });
+                const metricValue = computed(() => {
+                    const c = compareResult.value && compareResult.value.result && compareResult.value.result.comparison;
+                    if (!c) return '';
+                    if (c.combined_mean !== undefined && c.combined_mean !== null) return c.combined_mean;
+                    if (c.aggregate && c.aggregate.mean !== undefined) return c.aggregate.mean;
+                    return '';
+                });
+                const preferredName = computed(() => {
+                    const cr = compareResult.value;
+                    if (!cr || !preferredUuid.value) return '';
+                    return preferredUuid.value === cr.a.uuid ? cr.a.name : cr.b.name;
+                });
                 
                 const suspectedGroups = computed( () => {
                     return groups.value.filter(g => g.status !== 'confirmed');
@@ -1257,7 +1455,9 @@
                     handleSuspectedExpandChange, handleConfirmedExpandChange, setNestedTableRef, suspectedGroupsTableRef,
                     expandAllSuspectedGroups, expandAllConfirmedGroups, collapseAllSuspectedGroups, collapseAllConfirmedGroups,
                     expandedSuspectedCount, expandedConfirmedCount,
-                    cleanupConfirmed, isServeMode, reasonLabel, reasonTagType
+                    cleanupConfirmed, isServeMode, reasonLabel, reasonTagType,
+                    versionGroups, clusterThreshold, startVersionClustering, startCompare,
+                    compareResult, compareDialogVisible, preferredName, preferredUuid, otherUuid, confidenceText, metricValue
                 };
             }
         });
