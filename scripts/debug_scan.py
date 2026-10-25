@@ -1,8 +1,8 @@
 import sys
 import os
 
-# Add movie_manager to path
-sys.path.append(os.path.join(os.path.dirname(__file__), 'movie_manager'))
+# Add movie_manager to path (this script lives in scripts/, the package is one level up)
+sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'movie_manager'))
 
 import time
 import json
