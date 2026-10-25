@@ -11,7 +11,7 @@ from scan_manager import ScanManager
 from app_paths import get_app_dir
 
 # App Version
-__version__ = "0.0.9"
+__version__ = "0.0.10"
 
 # Configure logging to file (writable dir, see app_paths)
 log_file = os.path.join(get_app_dir(), 'duplicate_checker.log')
