@@ -359,6 +359,22 @@ class ScanManager:
         self._start_thread(self._run_compare, fa, fb)
         return True, "Comparison started"
 
+    def start_batch_compare(self, uuids):
+        """版本组批量对比：N 个文件跑 N-1 个相邻对（按体积降序）。"""
+        if self.is_busy():
+            return False, "Task already in progress"
+        uniq = []
+        seen = set()
+        for u in (uuids or []):
+            if u and u not in seen and self.get_file(u):
+                seen.add(u)
+                uniq.append(u)
+        if len(uniq) < 2:
+            return False, "Select at least two existing files"
+
+        self._start_thread(self._run_batch_compare, uniq)
+        return True, "Batch comparison started"
+
     # --- Control ---
     def stop_scan(self):
         if self.status != "idle":
@@ -683,42 +699,59 @@ class ScanManager:
             self.status = "comparing"
             self.message = "Comparing video quality (videodiff)..."
             self.progress = 50
-            self._log(f"Comparing: {fa['filename']} vs {fb['filename']}")
+            self.compare_result = self._compare_one(fa, fb)
+            if self.compare_result.get('error'):
+                self._log('Compare failed: ' + self.compare_result['error'])
+                self.message = "Compare failed."
+            else:
+                self._log("Compare complete.")
+            self.status = "scanned"
+            self.progress = 100
+            self.message = self.message if self.message.startswith("Compare") else "Compare complete."
+        except subprocess.TimeoutExpired:
+            self.compare_result = {'error': '对比超时（超过 60 分钟）'}
+            self.status = "scanned"
+            self.progress = 100
+            self.message = "Compare timed out."
+        except Exception as e:
+            self.compare_result = {'error': str(e)}
+            self.status = "error"
+            self.message = 'Error: ' + str(e)
+            self._log('Compare error: ' + str(e))
 
+    def _compare_one(self, fa, fb, preflight_done=False):
+        """对比一对文件，返回单个 compare 结果 dict（含 error 字段）。
+
+        preflight_done: 批量模式下 doctor 已通过，跳过重复预检。
+        """
+        try:
             da, db = fa.get('duration') or 0, fb.get('duration') or 0
             align_warning = bool(da and db and abs(da - db) / max(da, db) > 0.005)
+            head = {
+                'a': {'uuid': fa['uuid'], 'name': fa['filename']},
+                'b': {'uuid': fb['uuid'], 'name': fb['filename']},
+                'align_warning': align_warning,
+            }
 
-            self.compare_result = None
             cmd = self._videodiff_cmd()
+            if not preflight_done:
+                # Preflight: doctor --json (exit 10 = environment not usable)
+                try:
+                    pre = subprocess.run(cmd + ['doctor', '--json'], capture_output=True,
+                                         text=True, encoding='utf-8', errors='replace', timeout=120)
+                    if pre.returncode != 0:
+                        detail = ''
+                        try:
+                            import json as _json
+                            detail = _json.loads(pre.stdout).get('error', {}).get('message', '')
+                        except Exception:
+                            detail = (pre.stderr or pre.stdout or '').strip()[:300]
+                        return {**head, 'error': 'videodiff 环境不可用: ' + (
+                            detail or 'ffmpeg 或指标 filter 缺失（需要带 ssim/psnr/libvmaf 的完整版 ffmpeg）')}
+                except FileNotFoundError:
+                    return {**head, 'error': '未找到 videodiff。请安装 video_diff 项目'
+                                             '（pip install <video_diff 路径>）或设置 VIDEODIFF 环境变量。'}
 
-            # Preflight: doctor --json (exit 10 = environment not usable)
-            try:
-                pre = subprocess.run(cmd + ['doctor', '--json'], capture_output=True,
-                                     text=True, encoding='utf-8', errors='replace', timeout=120)
-                if pre.returncode != 0:
-                    detail = ''
-                    try:
-                        import json as _json
-                        detail = _json.loads(pre.stdout).get('error', {}).get('message', '')
-                    except Exception:
-                        detail = (pre.stderr or pre.stdout or '').strip()[:300]
-                    self.compare_result = {
-                        'error': 'videodiff 环境不可用: ' + (detail or 'ffmpeg 或指标 filter 缺失（需要带 ssim/psnr/libvmaf 的完整版 ffmpeg）')
-                    }
-                    self.status = "scanned"
-                    self.progress = 100
-                    self.message = "Compare failed (environment)."
-                    return
-            except FileNotFoundError:
-                self.compare_result = {
-                    'error': '未找到 videodiff。请安装 video_diff 项目（pip install <video_diff 路径>）或设置 VIDEODIFF 环境变量。'
-                }
-                self.status = "scanned"
-                self.progress = 100
-                self.message = "Compare failed (videodiff missing)."
-                return
-
-            self._log("videodiff doctor OK, running compare...")
             proc = subprocess.run(
                 cmd + ['compare', fa['path'], fb['path'], '--json'],
                 capture_output=True, text=True, encoding='utf-8', errors='replace',
@@ -732,42 +765,73 @@ class ScanManager:
                 result = None
 
             if proc.returncode == 0 and result and not result.get('error'):
-                self.compare_result = {
-                    'a': {'uuid': fa['uuid'], 'name': fa['filename']},
-                    'b': {'uuid': fb['uuid'], 'name': fb['filename']},
-                    'result': result,
-                    'align_warning': align_warning,
-                    'error': None,
-                }
-                self._log("Compare complete.")
-            else:
-                msg = ''
-                if result and result.get('error'):
-                    msg = result['error'].get('message', '')
-                if not msg:
-                    tail = (proc.stderr or proc.stdout or '').strip().splitlines()
-                    msg = tail[-1] if tail else 'exit code %d' % proc.returncode
-                self.compare_result = {
-                    'a': {'uuid': fa['uuid'], 'name': fa['filename']},
-                    'b': {'uuid': fb['uuid'], 'name': fb['filename']},
-                    'align_warning': align_warning,
-                    'error': 'videodiff: ' + msg,
-                }
-                self._log('Compare failed: ' + msg)
+                return {**head, 'result': result, 'error': None}
 
-            self.status = "scanned"
-            self.progress = 100
-            self.message = "Compare complete." if not self.compare_result.get('error') else "Compare failed."
+            msg = ''
+            if result and result.get('error'):
+                msg = result['error'].get('message', '')
+            if not msg:
+                tail = (proc.stderr or proc.stdout or '').strip().splitlines()
+                msg = tail[-1] if tail else 'exit code %d' % proc.returncode
+            return {**head, 'error': 'videodiff: ' + msg}
         except subprocess.TimeoutExpired:
-            self.compare_result = {'error': '对比超时（超过 60 分钟）'}
+            return {'a': {'uuid': fa['uuid'], 'name': fa['filename']},
+                    'b': {'uuid': fb['uuid'], 'name': fb['filename']},
+                    'error': '对比超时（超过 60 分钟）'}
+
+    def _run_batch_compare(self, uuids):
+        """版本组批量对比：对 N 个文件按体积降序跑 N-1 个相邻对。
+
+        第一个（体积最大）作为锚点，逐对与下一个比较，如 A vs B、B vs C……
+        单对失败不中断整批；结果列表按顺序存入 compare_result['pairs']。
+        """
+        try:
+            self.status = "comparing"
+            self.message = "Preparing batch compare..."
+            self.progress = 5
+
+            files = [self.get_file(u) for u in uuids]
+            files = [f for f in files if f]
+            if len(files) < 2:
+                self.compare_result = {'error': '至少需要两个文件'}
+                self.status = "scanned"
+                self.progress = 100
+                return
+
+            files.sort(key=lambda f: f.get('size', 0), reverse=True)
+
+            # 批量前先跑第一对：doctor 预检包含在内，环境问题直接终止整批
+            probe = self._compare_one(files[0], files[1])
+            first_err = str(probe.get('error') or '')
+            if '环境不可用' in first_err or '未找到 videodiff' in first_err:
+                self.compare_result = {'error': first_err}
+                self.status = "scanned"
+                self.progress = 100
+                self.message = "Batch compare failed (environment)."
+                return
+
+            pairs = [probe]  # 第一对已经跑完，直接复用
+            for i in range(1, len(files) - 1):
+                if self._stop_event.is_set():
+                    self._log("Batch compare cancelled.")
+                    break
+                pair = self._compare_one(files[i], files[i + 1], preflight_done=True)
+                pairs.append(pair)
+                self.progress = int((i + 1) / (len(files) - 1) * 95)
+                self.message = f"Batch compare {i + 1}/{len(files) - 1}: {pair['a']['name']} vs {pair['b']['name']}"
+                if pair.get('error'):
+                    self._log('Pair failed: ' + pair['error'])
+
+            self.compare_result = {'pairs': pairs, 'error': None}
+            self._log(f"Batch compare complete: {len(pairs)} pair(s).")
             self.status = "scanned"
             self.progress = 100
-            self.message = "Compare timed out."
+            self.message = "Batch compare complete."
         except Exception as e:
             self.compare_result = {'error': str(e)}
             self.status = "error"
             self.message = 'Error: ' + str(e)
-            self._log('Compare error: ' + str(e))
+            self._log('Batch compare error: ' + str(e))
 
 # Global instance
 manager = ScanManager()

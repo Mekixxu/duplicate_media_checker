@@ -11,7 +11,7 @@ from scan_manager import ScanManager
 from app_paths import get_app_dir
 
 # App Version
-__version__ = "0.0.11"
+__version__ = "0.0.12"
 
 # Configure logging to file (writable dir, see app_paths)
 log_file = os.path.join(get_app_dir(), 'duplicate_checker.log')
@@ -131,6 +131,17 @@ def start_compare():
         return jsonify({'success': False, 'message': 'Select exactly two files'}), 400
 
     success, msg = manager.start_compare(uuids[0], uuids[1])
+    return jsonify({'success': success, 'message': msg})
+
+@app.route('/api/compare/batch', methods=['POST'])
+def start_batch_compare():
+    """版本组批量对比：N 个文件按体积降序跑 N-1 个相邻对。"""
+    data = request.json or {}
+    uuids = data.get('uuids', [])
+    if len(uuids) < 2:
+        return jsonify({'success': False, 'message': 'Select at least two files'}), 400
+
+    success, msg = manager.start_batch_compare(uuids)
     return jsonify({'success': success, 'message': msg})
 
 @app.route('/api/compare/result')

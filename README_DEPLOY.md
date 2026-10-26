@@ -24,6 +24,15 @@ python build.py
 
 打包完成后，您会在 `dist` 文件夹中找到生成的 `.zip` 压缩包（例如 `DuplicateChecker_v0.0.4.zip`）。该压缩包已包含所有必要文件。
 
+## 注意：画质对比依赖（可选）
+
+打包的 exe 不包含 `videodiff`。若需要画质对比功能，需在目标机器上：
+
+1. 安装 Python 3.10+ 与 video_diff 项目（`pip install <video_diff 路径>`），并确保 `videodiff` 命令可用（在 PATH 中，或设置 `VIDEODIFF` 环境变量）；
+2. 保证 ffmpeg 带 ssim/psnr 滤镜（`ff_res` 内的 ffmpeg 已具备；VMAF 需完整版 ffmpeg）。
+
+未安装时其余功能（扫描、去重、版本聚类、批量清理）完全可用。
+
 ## 4. 在其他电脑上运行
 
 要将程序部署到其他电脑（**无需安装 Python**），请遵循以下步骤：

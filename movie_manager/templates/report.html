@@ -608,6 +608,9 @@
                                     <el-button type="primary" size="small" :disabled="selectedInGroup(props.row.id).length !== 2 || !isServeMode" @click="startCompare(props.row.id)">
                                         <el-icon><Cpu /></el-icon> 画质对比选中
                                     </el-button>
+                                    <el-button type="warning" size="small" :disabled="props.row.files.length < 2 || !isServeMode" @click="startBatchCompare(props.row)">
+                                        <el-icon><Sort /></el-icon> 批量对比全部 (<span v-text="props.row.files.length"></span>)
+                                    </el-button>
                                     <el-button type="danger" size="small" :disabled="selectedInGroup(props.row.id).length === 0" @click="batchDelete(props.row.id)">
                                         <el-icon><Delete /></el-icon> 删除选中 (<span v-text="selectedInGroup(props.row.id).length"></span>)
                                     </el-button>
@@ -661,6 +664,38 @@
         <el-dialog v-model="compareDialogVisible" title="画质对比结果" width="760px" top="8vh">
             <div v-if="compareResult">
                 <el-alert v-if="compareResult.error" type="error" :title="compareResult.error" :closable="false" show-icon></el-alert>
+                <template v-else-if="compareResult.pairs">
+                    <el-table :data="batchRows" size="small" border style="width: 100%">
+                        <el-table-column label="对" min-width="260">
+                            <template #default="scope">
+                                <span v-text="scope.row.aName + '  vs  ' + scope.row.bName"></span>
+                            </template>
+                        </el-table-column>
+                        <el-table-column label="指标" width="170">
+                            <template #default="scope">
+                                <span v-if="scope.row.metric" v-text="scope.row.metric + ' = ' + scope.row.score"></span>
+                                <el-tag v-else size="small" type="danger" v-text="'失败'"></el-tag>
+                            </template>
+                        </el-table-column>
+                        <el-table-column label="建议保留" min-width="180">
+                            <template #default="scope">
+                                <el-tag v-if="scope.row.verdictType === 'prefer_a'" type="success" v-text="scope.row.aName"></el-tag>
+                                <el-tag v-else-if="scope.row.verdictType === 'prefer_b'" type="success" v-text="scope.row.bName"></el-tag>
+                                <el-tag v-else-if="scope.row.verdictType === 'equivalent_prefer_smaller'" type="info">无差异，保小</el-tag>
+                                <span v-else style="color: #909399;" v-text="scope.row.verdictType || '无'"></span>
+                                <div v-if="scope.row.reasonText" style="font-size: 12px; color: #909399;" v-text="scope.row.reasonText"></div>
+                            </template>
+                        </el-table-column>
+                        <el-table-column label="耗时(秒)" width="90">
+                            <template #default="scope"><span v-text="scope.row.elapsed"></span></template>
+                        </el-table-column>
+                    </el-table>
+                    <div style="margin-top: 12px; text-align: right;" v-if="batchPreferredUuid && batchOtherUuid">
+                        <el-button type="danger" @click="deleteFile(batchOtherUuid); compareDialogVisible = false;">
+                            保留 <span v-text="batchPreferredName"></span>，删除另一个（移入回收站）
+                        </el-button>
+                    </div>
+                </template>
                 <template v-else>
                     <el-descriptions :column="1" border size="small">
                         <el-descriptions-item label="对比文件">
@@ -1097,6 +1132,19 @@
                     } catch (e) { console.error('Compare result fetch error', e); }
                 };
 
+                const startBatchCompare = async (group) => {
+                    comparePending = true;
+                    try {
+                        const res = await fetch('/api/compare/batch', {
+                            method: 'POST', headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({ uuids: group.files.map(f => f.uuid) })
+                        });
+                        const data = await res.json();
+                        if (data.success) { isBusy.value = true; startPolling(); }
+                        else { comparePending = false; ElementPlus.ElMessage.error(data.message); }
+                    } catch (e) { comparePending = false; ElementPlus.ElMessage.error(e); }
+                };
+
                 const startDeepVerify = async (groupId) => {
                     // ... (existing)
                     // We can reuse the batch endpoint or existing one.
@@ -1422,6 +1470,49 @@
                     const a = compareResult.value && compareResult.value.result && compareResult.value.result.alignment;
                     return (a && a.mode) || '';
                 });
+                // 批量结果 -> 表格行；附带推导"整组建议保留者"（第一对的建议者）
+                const batchRows = computed(() => {
+                    const cr = compareResult.value;
+                    if (!cr || !cr.pairs) return [];
+                    return cr.pairs.map(p => {
+                        const v = (p.result && p.result.verdict) || {};
+                        const c = (p.result && p.result.comparison) || {};
+                        let score = '';
+                        if (c.combined_mean !== undefined && c.combined_mean !== null) score = c.combined_mean;
+                        else if (c.aggregate && c.aggregate.mean !== undefined) score = c.aggregate.mean;
+                        return {
+                            aName: (p.a || {}).name || '?',
+                            bName: (p.b || {}).name || '?',
+                            metric: c.metric || '',
+                            score: score,
+                            verdictType: v.type || '',
+                            reasonText: (p.error || (v.reasons && v.reasons[0]) || ''),
+                            elapsed: (p.result && p.result.elapsed_s) || ''
+                        };
+                    });
+                });
+                const batchFirst = computed(() => {
+                    const cr = compareResult.value;
+                    if (!cr || !cr.pairs || !cr.pairs.length) return null;
+                    const p0 = cr.pairs[0];
+                    if (p0.error) return null;
+                    const v = ((p0.result || {}).verdict) || {};
+                    if (!v.preferred) return null;
+                    const rf = ((p0.result || {}).files) || [];
+                    if (rf.length >= 1 && rf[0].path === v.preferred) return { uuid: p0.a.uuid, name: p0.a.name };
+                    if (rf.length >= 2 && rf[1].path === v.preferred) return { uuid: p0.b.uuid, name: p0.b.name };
+                    return null;
+                });
+                const batchPreferredUuid = computed(() => (batchFirst.value || {}).uuid || '');
+                const batchPreferredName = computed(() => (batchFirst.value || {}).name || '');
+                const batchOtherUuid = computed(() => {
+                    const cr = compareResult.value;
+                    const f = batchFirst.value;
+                    if (!cr || !cr.pairs || !cr.pairs.length || !f) return '';
+                    const p0 = cr.pairs[0];
+                    return f.uuid === p0.a.uuid ? p0.b.uuid : p0.a.uuid;
+                });
+
                 const metricValue = computed(() => {
                     const c = compareResult.value && compareResult.value.result && compareResult.value.result.comparison;
                     if (!c) return '';
@@ -1465,7 +1556,8 @@
                     expandedSuspectedCount, expandedConfirmedCount,
                     cleanupConfirmed, isServeMode, reasonLabel, reasonTagType,
                     versionGroups, clusterThreshold, startVersionClustering, startCompare,
-                    compareResult, compareDialogVisible, preferredName, preferredUuid, otherUuid, confidenceText, metricValue, alignMode
+                    compareResult, compareDialogVisible, preferredName, preferredUuid, otherUuid, confidenceText, metricValue, alignMode,
+                    startBatchCompare, batchRows, batchPreferredUuid, batchOtherUuid, batchPreferredName
                 };
             }
         });
